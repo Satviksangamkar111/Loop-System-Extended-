@@ -1,0 +1,186 @@
+---
+title: Repository (.abapgit.xml)
+category: repo settings
+order: 10
+---
+
+**`.abapgit.xml`** is a special abapGit file. It contains meta information on the abapGit project. The file must be located in the root folder of the Git repository.
+
+It is recommended to edit .abapgit.xml using "Repository Settings" ![](/img/repo_settings.png) in abapGit.
+(In exceptional cases, you could edit the XML directly via "Utilities > Database Util" ![](/img/utilities.png).)
+
+![](/img/repo_settings_menu.png)
+
+Example: abapGit's own `.abapgit.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<asx:abap xmlns:asx="http://www.sap.com/abapxml" version="1.0">
+ <asx:values>
+  <DATA>
+   <MASTER_LANGUAGE>E</MASTER_LANGUAGE>
+   <STARTING_FOLDER>/src/</STARTING_FOLDER>
+   <FOLDER_LOGIC>PREFIX</FOLDER_LOGIC>
+  </DATA>
+ </asx:values>
+</asx:abap>
+```
+
+## Repository Settings
+
+The following settings are stored in the repository and therefore valid for all users.
+
+![](/img/repo_settings_abapgit_xml.png)
+![](/img/repo_settings_abapgit_xml_2.png)
+![](/img/repo_settings_abapgit_xml_3.png)
+
+## Name and Version
+
+You can give your repository a name and version. The name will be used in the corresponding column of the repository list. The version is taken from the code by specifying a constant in a class or interface that's part of your project.
+
+:::info
+Users can overwrite the official name by entering a display name in their local settings.
+:::
+
+## Texts
+
+### Main Language
+
+The main language is the language in which all texts belonging to repository objects will be created. It follows the SAP `sy-langu` values. Note that this implies that all objects in a repository must have the same main language.
+
+:::warning
+abapGit does *not* support changing the main language of objects. Therefore, this setting can not be changed using abapGit. If the main language was changed in the git repository, you will have to uninstall the repository in your system (in the current main language) and reinstall it (in the new main language).
+:::
+
+### Translation Languages
+
+There are currently two options available for including translations in a repository:
+
+1. Object-specific logic provided by the object serializer class
+2. Generic logic provided by abapGit framework (experimental, [#4415](https://github.com/abapGit/abapGit/pull/4415))
+
+If no translation languages are maintained in this setting, the first approach is used. If you maintain a list of translation languages (comma-separated, 2-letter ISO language codes), then these languages will be included in the serialization. See also [Translations and i18n](/user-guide/reference/translations.md)
+
+You can suppress translations with the local "Only Serialize Main Language" setting (see below).
+
+## Files
+
+### Starting Folder
+
+The starting folder is the Git repository folder that defines the root where deserialization starts.
+
+### Folder Logic
+
+abapGit follows three folder logics: "Prefix", "Full", and "Mixed".
+
+#### Prefix
+
+A package name must contain its parent package name as a prefix. Examples:
+
+Valid package prefix:
+
+```
+ZFOO
+  ZFOO_BAR
+    ZFOO_BAR_QUX
+```
+
+This will produce the following folder structure:
+
+```
+/src
+/src/bar
+/src/bar/qux
+```
+
+Invalid package prefix:
+
+```
+ZFOO
+  ZBAR
+```
+
+The folder logic PREFIX allows installing a repository into a different parent package (in different systems). This can even be local packages (`$*`), in which case no transport order is required.
+
+#### Full
+
+Any package name is accepted.
+
+```
+ZBASE
+  ZSOMETHING
+    ZHELLO
+```
+
+This will produce the following folder structure:
+
+```
+/src
+/src/zsomething
+/src/zsomething/zhello
+```
+
+The folder logic FULL forces the installation of a repository into packages with the same name. Note that this can be problematic for contributors who use a system where specific prefixes for the package names are to be used.
+
+#### Mixed
+
+The folder logic MIXED combines PREFIX and FULL. The root package name will be used as a prefix for all sub-packages but the package names are not concatenated recursively. This will allow to use significantly logic package names.
+
+Example package hierarchy:
+
+```
+ZBASE
+  ZBASE_ZFOO
+    ZBASE_ZBAR
+      ZBASE_ZSUB_PACK_WITH_LONG_NAME
+```
+
+This will produce the following folder structure:
+
+```
+/src
+/src/zfoo
+/src/zfoo/zbar
+/src/zfoo/zbar/zsub_pack_with_long_name
+```
+
+### Ignore Files
+
+Files that abapGit will not download to your ABAP system. Typically, this includes references to readme, changelog, and license
+files as well as repository configuration related to workflows like build or linting jobs.
+
+Assuming that the default starting folder `/src/` is used, any files in root `/` or any other folder than the starting folder are ignored automatically. Therefore it will not be necessary to list files of the root folder in the ignore list (and as a consequence, the default ignore list is empty).
+
+The ignore logic is based on the "[CP - covers pattern](https://help.sap.com/doc/abapdocu_latest_index_htm/LATEST/en-US/ABENLOGEXP_STRINGS.html)" operator (note: it's not a Regex). A file is ignored, if the path and file cover at least one of the patterns listed in this setting.
+
+Examples: 
+
+- `/src/hr/zcl_confidential*`:  ignore all classes in the `/src/hr` package that begin with `zcl_confidential`.
+- `*.prog.abap`: ignore all programs (in all packages)
+- `*#namespc#cl_test.*`: ignore class `/namespc/cl_test` (in filenames namespace separators `/` are replaces with `#`)
+
+## ABAP
+
+### Requirements
+
+In this section, you can specify the minimum requirements that should be fulfilled to allow installation of the repository. Listed software components should exist in the target system and be at the given release or higher. If the target system matches the minimum release, then it must also be at the given patch level or higher.
+
+### Source System
+
+#### Default Behaviour
+
+When importing objects in the default customer namespace (Y- or Z-packages), objects are assigned to the current system (`TADIR-SRCSYSTEM = SY-SYSID`). It works the same way, when importing objects into a namespace that has a producer key. This means you can freely create and modify objects in this namespace. However, if the namespace only has a repair key, abapGit will assign the importing objects to "SAP" (`TADIR-SRCSYSTEM = 'SAP'`). As a result, you will not be able to modify the objects. 
+
+#### Setting a Source System
+
+If you want to allow modifying objects even if only a repair key is present (or part of the NSPC object in the repo), then you can set the source system in the repository settings to "SID". During import, abapGit will assign objects to the current system (`SY-SYSID`), which makes them modifiable. The typical use case is open-source projects using a namespace.
+
+If you want to preserve the original system, you can set the source system accordingly. For example, your repository originates in system "DEV". Set source system in your repository settings to "DEV". When you import the repository to system "ABC" objects will be assigned to "DEV" and therefore will not be modifiable. The typical use case is landscapes with multiple development systems where you want to share common packages (but keep the link to the original).
+
+### ABAP Language Version
+
+:::warning
+Using ABAP language version in abapGit is still an experimental feature. 
+:::
+
+You can define how abapGit handles the ABAP language version of objects in a repository. The default setting is "Any" which allows objects of any ABAP language version to be included in your repository. The other settings will limit the type of objects to exactly one of the ABAP language versions. For more details, see [ABAP Language Version](/user-guide/reference/abap-language-version.md).

@@ -1,0 +1,58 @@
+{
+  "schema": 1,
+  "id": "abapgit_7922",
+  "repo": "abapGit/abapGit",
+  "pr": 7922,
+  "base_sha": "511cdbef4ea3b821b04bb09400b20911a5c82361",
+  "merge_sha": "7b5f9cf2420464781c67ae57791d8f7cd2bf4c57",
+  "label": "SEMI-GUIDED",
+  "ticket_source": "pr_body",
+  "production_file": "src/git/zcl_abapgit_git_add_patch.clas.abap",
+  "work_file": "abap_work/abapgit_7922/zcl_abapgit_git_add_patch.clas.abap",
+  "original_sha256": "452d10aea19dd65af6055036cf2d4986bd5c690c8efa82d447bf574f477dafa5",
+  "test_files": [
+    {
+      "path": "src/git/zcl_abapgit_git_add_patch.clas.testclasses.abap",
+      "stored": "tests_upstream/zcl_abapgit_git_add_patch.clas.testclasses.abap",
+      "sha256": "0c0512b6bf439f0efdbf694dce1cb52581ea48cde78dcd5bcee246cd7d3581bf",
+      "new_methods": [
+        "no_newline_marker_removed",
+        "mixed_final_newline"
+      ],
+      "heldout_methods": [
+        "mixed_final_newline"
+      ]
+    }
+  ],
+  "allowed_methods": [
+    "calculate_patch",
+    "without_marker"
+  ],
+  "runner": {
+    "project": "C:\\__NO_ABAP_RUNTIME__\\projects\\abapgit_511cdbef4e",
+    "project_dir": "C:\\__NO_ABAP_RUNTIME__\\projects\\abapgit_511cdbef4e",
+    "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\libs",
+    "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools",
+    "config": "test/abap_transpile.auto.json",
+    "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps",
+    "only_object": "ZCL_ABAPGIT_GIT_ADD_PATCH",
+    "repo": "abapGit/abapGit",
+    "base_sha": "511cdbef4ea3b821b04bb09400b20911a5c82361"
+  },
+  "gate": {
+    "base_transpiles": true,
+    "base_fails": [
+      "ltcl_calculate_patch->mixed_final_newline",
+      "ltcl_calculate_patch->no_newline_marker_removed"
+    ],
+    "fix_passes": true,
+    "heldout_fails_on_base": true,
+    "checked_utc": "2026-11-17T05:52:37+00:00",
+    "tool_versions": {
+      "@abaplint/transpiler-cli": "2.14.28",
+      "@abaplint/runtime": "2.14.28",
+      "@abaplint/cli": "2.120.100"
+    }
+  },
+  "created_utc": "2026-11-17T05:52:37+00:00"
+}

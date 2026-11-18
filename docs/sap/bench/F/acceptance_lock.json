@@ -1,0 +1,13 @@
+{
+  "docs/sap/bench/F/TICKET.md": "c483feb1015a7a1957765f2d2712d0f606c2e1a3dac231ad1d6ee97bbc2a67c9",
+  "docs/sap/bench/F/abap_transpile.pinned2.json": "4b443cdc89798745578377803747ac68b9dfc697b93bb3f57352e68b7788f2b5",
+  "docs/sap/bench/F/runner.json": "976f4019975dd13297adb6215552b701ca1ae45546de8f4926776a1ee987c78a",
+  "tests/acceptance/sap_F_acceptance.py": "377febcb9365d8cd8a3f157a812e622947c39b957112af5fa728e3fffeb9f0ed",
+  "tests/controls/sap_F_original.abap": "ca315c28761a0f5d8991277e22f78ceaa0a69797122decd4db202fb265fdf495",
+  "tests/controls/sap_F_upstream_fix.abap": "1f87417143a0a95807190e9f0957403f9c449fb46fb17a08b131b4d974043cc0",
+  "tests/controls/sap_F_no_indent_at_all.abap": "7a7ebe1b6feaf6949aaf547bfcf309d23819eeecaa513bc42bc6a4ab99268056",
+  "tests/controls/sap_F_kernel_poc.abap": "68fbc90d5153c3a9a2ce505a54a7252e390cf2a77f98a00c5852cfbc826cd8f6",
+  "tests/controls/sap_F_collateral.abap": "42273816fb418de01ffc0448362867ec1e702c6462772ee6622c9f367b8a6c04",
+  "tests/controls/sap_F_syntax_broken.abap": "8a6f8307ea0391ed95ca523c7704102e505c9f45ad8ccc3265c580a0dbc4637b",
+  "tests/controls/sap_F_pre_never_closed.abap": "e03fadfc659a5d1ccfdfa27b2edc296c9e6e34d2bc3f5a1b9b5faf23900ad26d"
+}

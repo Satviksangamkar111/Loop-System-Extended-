@@ -1,0 +1,19 @@
+CLASS z_humaneval_erp_004 DEFINITION
+  PUBLIC
+  FINAL
+  CREATE PUBLIC.
+
+  PUBLIC SECTION.
+    CLASS-METHODS: is_valid_hierarchy
+      RETURNING VALUE(rv_valid) TYPE abap_bool.
+  PROTECTED SECTION.
+  PRIVATE SECTION.
+ENDCLASS.
+
+CLASS z_humaneval_erp_004 IMPLEMENTATION.
+
+  METHOD is_valid_hierarchy.
+  ENDMETHOD.
+
+
+ENDCLASS.

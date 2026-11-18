@@ -1,0 +1,29 @@
+Write an ABAP class with a static method that counts the number of bookings for a specific flight. It should accept flight information (carrier, connection ID, date) and return the number of bookings for that flight.
+Input Parameters:
+iv_carrid type abap.char(3)
+iv_connid type abap.numc(4)
+iv_fldate type dats
+
+Relevant Data Table
+define table sbook {
+    key carrid   : abap.char(3) not null;
+    key connid   : abap.numc(4) not null;
+    key fldate   : abap.dats not null;
+    key bookid   : abap.char(10);
+    customid     : abap.char(10);
+}
+
+Example:
+Input:
+INSERT VALUE #( carrid = 'LH' connid = '1001' fldate = '20250722' bookid = 'B001' customid = 'C001' ) INTO sbook.
+INSERT VALUE #( carrid = 'LH' connid = '1001' fldate = '20250722' bookid = 'B002' customid = 'C002' ) INTO sbook.
+INSERT VALUE #( carrid = 'LH' connid = '1002' fldate = '20250722' bookid = 'B003' customid = 'C003' ) INTO sbook.
+INSERT VALUE #( carrid = 'AF' connid = '2001' fldate = '20250722' bookid = 'B004' customid = 'C004' ) INTO sbook.
+Output:
+DATA(lv_count) = lcl_booking_counter=>count_bookings_for_flight(
+    iv_carrid = 'LH'
+    iv_connid = '1001'
+    iv_fldate = '20250722' ).
+" lv_count: 2
+
+TARGET: implement this in the ABAP class Z_HUMANEVAL_ERP_014 in the given file. Its public section is already correct and must stay as it is: the methods there are the ones to implement, their bodies are empty now. Private helper methods may be added. If the text above is written in another language or names another class or method, its behaviour is what counts.

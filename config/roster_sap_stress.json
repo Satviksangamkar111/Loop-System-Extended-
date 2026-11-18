@@ -1,0 +1,249 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "profiles": {
+    "test": {
+      "probe_max_tokens": 256,
+      "repair_max_tokens": 10000,
+      "effort_by_mode": {
+        "write": "high",
+        "repair": "low",
+        "review": "low",
+        "review-reask": "low"
+      },
+      "stages": {
+        "planner": {},
+        "writer_a_write": {},
+        "writer_a_repair": {},
+        "writer_b_write": {},
+        "writer_b_repair": {},
+        "reviewer_b": {},
+        "reviewer_a": {},
+        "reviewer_reask": {},
+        "specialist_repair": {},
+        "review_fix_repair": {}
+      },
+      "roles": {
+        "writer_a": {
+          "model": "dots-studio/dots-3-note-preview:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 40000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "writer_b": {
+          "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 40000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "reviewer_a": {
+          "model": "non_author_writer",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "reviewer_b": {
+          "model": "nvidia/nemotron-3.5-super-vl:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 16000,
+            "timeout_s": 600,
+            "sampling": null,
+            "max_tokens_cap": 72000
+          }
+        },
+        "repair": {
+          "model": "off",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "planner": {
+          "model": "fake",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        }
+      }
+    },
+    "production": {
+      "probe_max_tokens": 256,
+      "repair_max_tokens": 10000,
+      "effort_by_mode": {
+        "write": "high",
+        "repair": "low",
+        "review": "low",
+        "review-reask": "low"
+      },
+      "stages": {
+        "planner": {},
+        "writer_a_write": {},
+        "writer_a_repair": {},
+        "writer_b_write": {},
+        "writer_b_repair": {},
+        "reviewer_b": {},
+        "reviewer_a": {},
+        "reviewer_reask": {},
+        "specialist_repair": {},
+        "review_fix_repair": {}
+      },
+      "roles": {
+        "writer_a": {
+          "model": "liquid/lfm-3-1.7b:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 8192,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "writer_b": {
+          "model": "thinkingmachines/inkling-2-small:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 40000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "reviewer_a": {
+          "via": "claude_code",
+          "model": "haiku",
+          "effort": "medium",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "reviewer_b": {
+          "model": "nvidia/nemotron-3.5-super-vl:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 24000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "repair": {
+          "via": "claude_code",
+          "model": "haiku",
+          "effort": "high",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "planner": {
+          "model": "fake",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        }
+      }
+    }
+  },
+  "note": "STRESS roster for exercising the repair ladder: two weak free writers, Nemotron 3.5 Super and Haiku medium as reviewers, Haiku high as repair. Not for normal runs."
+}

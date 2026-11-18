@@ -1,0 +1,8 @@
+{
+  "project_dir": "C:\\__NO_ABAP_RUNTIME__\\projects\\D_project",
+  "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\libs",
+  "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools",
+  "config": "test/abap_transpile.pinned2.json",
+  "only_object": "ZCL_ABAPGIT_GIT_ADD_PATCH",
+  "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps"
+}

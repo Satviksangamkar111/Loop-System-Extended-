@@ -1,0 +1,112 @@
+{
+  "name": "bench-F",
+  "profile": "production",
+  "visibility": "public",
+  "spec": "docs/sap/bench/F/TICKET.md",
+  "files": [
+    "abap_work/abapgit_F/zcl_abapgit_html.clas.abap"
+  ],
+  "tests": [
+    "tests/acceptance/sap_F_acceptance.py"
+  ],
+  "acceptance_tests": [
+    "tests/acceptance/sap_F_acceptance.py"
+  ],
+  "reference": [],
+  "writer_reference": false,
+  "negative_controls": [
+    {
+      "name": "no_indent_at_all",
+      "replace": {
+        "abap_work/abapgit_F/zcl_abapgit_html.clas.abap": "tests/controls/sap_F_no_indent_at_all.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_F_acceptance.py::test_wrap",
+        "tests/acceptance/sap_F_acceptance.py::test_td",
+        "tests/acceptance/sap_F_acceptance.py::test_th",
+        "tests/acceptance/sap_F_acceptance.py::test_wrap_ii",
+        "tests/acceptance/sap_F_acceptance.py::test_indent1",
+        "tests/acceptance/sap_F_acceptance.py::test_indent2",
+        "tests/acceptance/sap_F_acceptance.py::test_indent3",
+        "tests/acceptance/sap_F_acceptance.py::test_indent4",
+        "tests/acceptance/sap_F_acceptance.py::test_style1",
+        "tests/acceptance/sap_F_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    },
+    {
+      "name": "kernel_poc",
+      "replace": {
+        "abap_work/abapgit_F/zcl_abapgit_html.clas.abap": "tests/controls/sap_F_kernel_poc.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_F_acceptance.py::test_wrap",
+        "tests/acceptance/sap_F_acceptance.py::test_add_renderable",
+        "tests/acceptance/sap_F_acceptance.py::test_td",
+        "tests/acceptance/sap_F_acceptance.py::test_th",
+        "tests/acceptance/sap_F_acceptance.py::test_wrap_ii",
+        "tests/acceptance/sap_F_acceptance.py::test_indent1",
+        "tests/acceptance/sap_F_acceptance.py::test_indent2",
+        "tests/acceptance/sap_F_acceptance.py::test_indent3",
+        "tests/acceptance/sap_F_acceptance.py::test_indent4",
+        "tests/acceptance/sap_F_acceptance.py::test_indent5",
+        "tests/acceptance/sap_F_acceptance.py::test_indent6",
+        "tests/acceptance/sap_F_acceptance.py::test_indent7",
+        "tests/acceptance/sap_F_acceptance.py::test_style1",
+        "tests/acceptance/sap_F_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    },
+    {
+      "name": "collateral",
+      "replace": {
+        "abap_work/abapgit_F/zcl_abapgit_html.clas.abap": "tests/controls/sap_F_collateral.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_F_acceptance.py::test_nothing_outside_changed_methods_changed"
+      ]
+    },
+    {
+      "name": "syntax_broken",
+      "replace": {
+        "abap_work/abapgit_F/zcl_abapgit_html.clas.abap": "tests/controls/sap_F_syntax_broken.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_F_acceptance.py::test_wrap",
+        "tests/acceptance/sap_F_acceptance.py::test_add_renderable",
+        "tests/acceptance/sap_F_acceptance.py::test_td",
+        "tests/acceptance/sap_F_acceptance.py::test_th",
+        "tests/acceptance/sap_F_acceptance.py::test_wrap_ii",
+        "tests/acceptance/sap_F_acceptance.py::test_indent1",
+        "tests/acceptance/sap_F_acceptance.py::test_indent2",
+        "tests/acceptance/sap_F_acceptance.py::test_indent3",
+        "tests/acceptance/sap_F_acceptance.py::test_indent4",
+        "tests/acceptance/sap_F_acceptance.py::test_indent5",
+        "tests/acceptance/sap_F_acceptance.py::test_indent6",
+        "tests/acceptance/sap_F_acceptance.py::test_indent7",
+        "tests/acceptance/sap_F_acceptance.py::test_style1",
+        "tests/acceptance/sap_F_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    }
+  ],
+  "acceptance_baseline_fail": [
+    "tests/acceptance/sap_F_acceptance.py::test_indent7"
+  ],
+  "fixers": [
+    "writer_a",
+    "writer_b"
+  ],
+  "reviewers": "by_lineage",
+  "budget": {
+    "free_requests": 40,
+    "review_usd": 0.05,
+    "paid_usd": 0
+  },
+  "deadline_min": 120,
+  "sandbox_include": [
+    "scripts",
+    "tests",
+    "abap_work",
+    "config",
+    "docs"
+  ],
+  "writer_edit": true
+}

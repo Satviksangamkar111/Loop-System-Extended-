@@ -1,0 +1,92 @@
+{
+  "name": "bench-E",
+  "profile": "production",
+  "visibility": "public",
+  "spec": "docs/sap/bench/E/TICKET.md",
+  "files": [
+    "abap_work/openabap_E/cl_abap_tstmp.clas.abap"
+  ],
+  "tests": [
+    "tests/acceptance/sap_E_acceptance.py"
+  ],
+  "acceptance_tests": [
+    "tests/acceptance/sap_E_acceptance.py"
+  ],
+  "reference": [],
+  "writer_reference": false,
+  "negative_controls": [
+    {
+      "name": "input_fraction_only",
+      "replace": {
+        "abap_work/openabap_E/cl_abap_tstmp.clas.abap": "tests/controls/sap_E_input_fraction_only.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_E_acceptance.py::test_add_fraction_carries",
+        "tests/acceptance/sap_E_acceptance.py::test_subtractsecs_keeps_fraction"
+      ]
+    },
+    {
+      "name": "subtract_type_only",
+      "replace": {
+        "abap_work/openabap_E/cl_abap_tstmp.clas.abap": "tests/controls/sap_E_subtract_type_only.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_E_acceptance.py::test_subtract_fraction"
+      ]
+    },
+    {
+      "name": "kernel_poc",
+      "replace": {
+        "abap_work/openabap_E/cl_abap_tstmp.clas.abap": "tests/controls/sap_E_kernel_poc.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_E_acceptance.py::test_add_keeps_fraction",
+        "tests/acceptance/sap_E_acceptance.py::test_no_new_abaplint_issues_in_the_edited_file"
+      ]
+    },
+    {
+      "name": "collateral",
+      "replace": {
+        "abap_work/openabap_E/cl_abap_tstmp.clas.abap": "tests/controls/sap_E_collateral.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_E_acceptance.py::test_nothing_outside_changed_methods_changed"
+      ]
+    },
+    {
+      "name": "syntax_broken",
+      "replace": {
+        "abap_work/openabap_E/cl_abap_tstmp.clas.abap": "tests/controls/sap_E_syntax_broken.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_E_acceptance.py::test_no_new_abaplint_issues_in_the_edited_file"
+      ]
+    }
+  ],
+  "acceptance_baseline_fail": [
+    "tests/acceptance/sap_E_acceptance.py::test_add_keeps_fraction",
+    "tests/acceptance/sap_E_acceptance.py::test_add_fraction_carries",
+    "tests/acceptance/sap_E_acceptance.py::test_subtractsecs_keeps_fraction",
+    "tests/acceptance/sap_E_acceptance.py::test_subtract_fraction",
+    "tests/acceptance/sap_E_acceptance.py::test_add_subtract_round_trip"
+  ],
+  "fixers": [
+    "writer_a",
+    "writer_b"
+  ],
+  "reviewers": "by_lineage",
+  "budget": {
+    "free_requests": 40,
+    "review_usd": 0.05,
+    "paid_usd": 0
+  },
+  "deadline_min": 120,
+  "sandbox_include": [
+    "scripts",
+    "tests",
+    "abap_work",
+    "config",
+    "docs"
+  ],
+  "writer_edit": true
+}

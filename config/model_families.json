@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "note": "Model families for the tie-break arbiter (p1b_routing.family_of). A model belongs to the first family whose prefix its ID starts with; a model that matches none is its own family. The Claude CLI names (haiku, sonnet, opus, fable) and the repair step's name (anthropic) are one family.",
+  "families": [
+    {
+      "family": "nvidia",
+      "prefixes": [
+        "nvidia/"
+      ]
+    },
+    {
+      "family": "dots",
+      "prefixes": [
+        "dots-studio/"
+      ]
+    },
+    {
+      "family": "openai",
+      "prefixes": [
+        "gpt-",
+        "openai/"
+      ]
+    },
+    {
+      "family": "anthropic",
+      "prefixes": [
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable",
+        "anthropic"
+      ]
+    },
+    {
+      "family": "mistral",
+      "prefixes": [
+        "mistralai/"
+      ]
+    },
+    {
+      "family": "stepfun",
+      "prefixes": [
+        "stepfun-ai/"
+      ]
+    },
+    {
+      "family": "deepseek",
+      "prefixes": [
+        "deepseek/"
+      ]
+    },
+    {
+      "family": "cohere",
+      "prefixes": [
+        "cohere/"
+      ]
+    },
+    {
+      "family": "moonshot",
+      "prefixes": [
+        "moonshotai/"
+      ]
+    },
+    {
+      "family": "google",
+      "prefixes": [
+        "google/"
+      ]
+    },
+    {
+      "family": "qwen",
+      "prefixes": [
+        "qwen/"
+      ]
+    }
+  ]
+}

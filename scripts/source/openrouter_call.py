@@ -1,0 +1,1353 @@
+"""OpenRouter adapter (P1a, architecture Revision 2). The only path to OpenRouter.
+
+Models come only from config/roster.json, read for the profile named by SATVIK_PROFILE (default "test"). Roster roles or exact free roster IDs
+only: no auto-routing alias, no fallback lists. Free IDs use the free key; every free attempt is reserved on the shared ledger
+(shared_limits, in the loop home) under its job, including solo runs, and a failed attempt keeps its reservation. The per-key folder keeps
+only the saved key snapshots: it never changes the count. A paid OpenRouter role (production reviewer_a)
+uses the paid key, is pinned to its roster provider, is reviewer-only (any other kind is refused before a request), and its reviews share one
+per-job ceiling that is reserved before each call. The test profile refuses any paid role when the roster is loaded, before any request.
+Every reply is checked before it counts. Errors are named exceptions; nothing falls back to another model or key. Private code is refused
+unless a route is approved in APPROVED_PRIVATE, which is empty: no approved non-training route exists yet.
+
+Any role may instead be called through Claude Code (2026-11-03): its roster entry says "via": "claude_code" with a model and an effort
+(claude_code.py holds the names the CLI takes and runs the call). Or "via": "cli_exec" (exec_role.py: a coding-agent CLI, its command in
+config/exec_role.json). A role with no "via" is an OpenRouter role. A Claude Code or cli_exec role is never sent here: resolve() refuses it,
+and it is not on the shared ledger. The test profile allows a Claude Code role only as claude_code.TEST_ONLY,
+refused while the roster loads.
+
+The model catalog (config/models.json, model_catalog.py, 2026-11-03) widens the exact IDs: its free models are allowed too, and under the
+production profile so is a paid catalog model with a pinned provider and prices (reviewer-only, on the paid budget, as a paid role).
+
+Importing this module calls no model. `main()` with `probe` makes one call per writer and reviewer role, by hand."""
+import contextlib
+import http.client
+import importlib.util
+import json
+import math
+import os
+import random
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from collections import namedtuple
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+API = "https://openrouter.ai/api/v1"
+ROSTER_PATH = REPO / "config" / "roster.json"
+PROFILE_VAR = "SATVIK_PROFILE"      # "test" (the default) or "production"
+WRITER_ROLES = ("writer_a", "writer_b")
+REVIEWER_ROLES = ("reviewer_b", "reviewer_a")     # the review panel's order: the free reviewer first, the paid one last (after a READY)
+ROLE_NAMES = ("writer_a", "writer_b", "reviewer_a", "reviewer_b", "repair", "planner")
+ARBITER_ROLES = ("arbiter_a", "arbiter_b")        # optional (2026-11-16): the tie-break arbiter candidates, in order; a roster without them has no arbiter
+SETTING_KEYS = ("temperature", "reasoning", "max_tokens", "timeout_s", "sampling", "max_tokens_cap")   # every role's numbers live in config/roster.json
+NON_AUTHOR_WRITER = "non_author_writer"  # reviewer_a under the test profile: the free writer that did not write the code
+SENTINELS = frozenset({NON_AUTHOR_WRITER, "off", "fake"})   # roster values that are not model IDs
+VIAS = ("openrouter", "claude_code", "cli_exec")    # how a role is called: its roster "via" (openrouter when the key is absent)
+APPROVED_PRIVATE = frozenset()      # owner decision 2026-11-02: no approved non-training route yet, so private jobs are blocked
+JOB_FREE_REQUESTS = 40
+JOB_REVIEW_USD_BY_PROFILE = {"test": 0.0, "production": 0.05}   # owner 2026-11-02: the paid-review ceiling per job is exactly 0 under test, exactly 0.05 in production
+JOB_REVIEW_USD = JOB_REVIEW_USD_BY_PROFILE["production"]        # reserved before each paid review call
+MAX_RETRIES = 3                     # HTTP retries after the first attempt
+BACKOFF_S = (2, 8, 30)              # plus up to 1 s of jitter
+MINUTE_WAIT_DEFAULT_S = 5.0
+MAX_WAIT_S = 120.0                  # a longer wait than this ends the call instead of sleeping
+REVIEWER_429_WAITS_S = (15, 30, 60, 120, 180)   # an upstream 429 on a reviewer call: these waits, plus up to 1 s of jitter (Retry-After when longer)
+BREAKER_LIMIT = 2                   # consecutive provider errors drop a model for the job
+TRUNCATION_RETRIES = 1              # one retry: a cut-off reply with no text goes again with reasoning off at the same size (R1); a cut-off text with a doubled max_tokens
+EFFORT_MODES = ("write", "repair", "review", "review-reask")   # the call modes that take a reasoning effort from the roster (R1: effort_by_mode)
+EFFORT_VALUES = (None, "off", "low", "medium", "high")
+KEY_FILES = {"free": ("OPENROUTER_FREE_KEY", "openrouter_free_key.txt"), "paid": ("OPENROUTER_PAID_KEY", "openrouter_paid_key.txt")}
+KEY_FIELDS = ("limit", "limit_remaining", "usage", "is_free_tier", "rate_limit", "free_model_daily_requests")
+FILE_BLOCK = re.compile(r"^(?:#{1,6}[ \t]*)?(?:\*\*FILE:\*\*|FILE:)[ \t]*(\S+)", re.M)   # a file header: FILE: p, ### FILE: p or **FILE:** p (p is group 1)
+VERDICT_LINE = re.compile(r"^## Verdict: (READY|FIX FIRST)$")
+SECRET_SHAPES = re.compile(r"\bsk-[A-Za-z0-9_\-]{6,}|Bearer\s+\S+|(?i:authorization)[\"']?\s*[:=]\s*[^\r\n,}\"']+")
+FAILURE_CHARS = 2000                # the first characters of a failed call's message that are kept (after redaction)
+PROMPT_FRAMING_TOKENS = 512         # the chat template's own tokens, added to a paid call's prompt bound (I49)
+ENDPOINT_MAX_AGE_S = 900.0          # a paid model's pinned endpoint price is read again after this long: a paid call never uses an older one (I49)
+_Hold = namedtuple("_Hold", "amount call_id")   # one paid reservation: its USD amount and, on the shared ledger, its call id (None otherwise); free: (0.0, None)
+
+
+def _shared_limits():
+    """package E's account ledger (scripts/source/shared_limits.py), imported on first use."""
+    source = str(REPO / "scripts" / "source")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    import shared_limits
+    return shared_limits
+
+
+def _claude_code():
+    """scripts/source/claude_code.py (the Claude Code runner and its names), imported on first use (the same path rule as _shared_limits)."""
+    source = str(REPO / "scripts" / "source")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    import claude_code
+    return claude_code
+
+
+def _exec_role():
+    """scripts/source/exec_role.py (the coding-agent CLI runner for a cli_exec role), imported on first use (the same path rule as _claude_code)."""
+    source = str(REPO / "scripts" / "source")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    import exec_role
+    return exec_role
+
+
+def via_of(spec):
+    """How a roster role is called: its "via", openrouter when it has none."""
+    return spec.get("via", "openrouter")
+
+
+def _catalog():
+    """scripts/source/model_catalog.py, imported on first use (the same path rule as _shared_limits)."""
+    source = str(REPO / "scripts" / "source")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    import model_catalog
+    return model_catalog
+
+
+def _same_price(a, b):
+    return a is not None and b is not None and math.isclose(float(a), float(b), rel_tol=1e-9, abs_tol=1e-15)
+
+
+def model_named(model, roles=None):
+    """True when config/models.json or a roster role in `roles` names the OpenRouter model (whatever its billing)."""
+    try:
+        if _catalog().entry_of(_catalog().load_catalog(), model) is not None:
+            return True
+    except Exception:
+        return True                                           # an unreadable catalog may name it: treat as named (conflicts fail closed)
+    return any(isinstance(spec, dict) and spec.get("model") == model and via_of(spec) == "openrouter" for spec in (roles or {}).values())
+
+
+def model_billing(model, roles=None):
+    """(paid, pin, prices) of an OpenRouter model, from where the model is named: its config/models.json entry (paid, hosting_provider, and
+    the prices per token, prompt and completion) and, when a roster role in `roles` ({role: spec}) names the same model, that role's own
+    values, which must agree. None when no source names the model, the two disagree, or the catalog cannot be read: the caller then refuses
+    the model. `prices` is {"prompt", "completion"} per token, or None when unknown. Reads config/models.json at each call."""
+    try:
+        entry = _catalog().entry_of(_catalog().load_catalog(), model)
+    except Exception:                                         # an unreadable catalog names no model: fail closed
+        entry = None
+    found = None
+    if entry is not None:
+        prices = None                                          # a free model has no prices, as a free roster role has none
+        if entry["paid"] and entry["price_in_usd_per_mtok"] is not None and entry["price_out_usd_per_mtok"] is not None:
+            prices = {"prompt": entry["price_in_usd_per_mtok"] / 1e6, "completion": entry["price_out_usd_per_mtok"] / 1e6}
+        pin = dict(entry["hosting_provider"]) if entry["hosting_provider"] is not None else None
+        found = (bool(entry["paid"]), pin, prices)
+    for spec in (roles or {}).values():
+        if not isinstance(spec, dict) or spec.get("model") != model or via_of(spec) != "openrouter":
+            continue
+        role = (bool(spec["paid"]), spec.get("provider"), spec.get("pricing"))
+        if found is None:
+            found = role
+            continue
+        same_prices = (found[2] is None and role[2] is None) or (found[2] and role[2] and _same_price(found[2]["prompt"], role[2]["prompt"])
+                                                                and _same_price(found[2]["completion"], role[2]["completion"]))
+        if found[0] != role[0] or found[1] != role[1] or not same_prices:
+            return None
+    return found
+
+
+def _loop_home():
+    """scripts/source/loop_home.py, imported on first use (the same path rule as _shared_limits)."""
+    source = str(REPO / "scripts" / "source")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    import loop_home
+    return loop_home
+
+
+def shared_job(name, fallback):
+    """A job id and its generation on the loop home (shared_limits), for a client that the launcher did not start (a solo run, a probe, a
+    test). The home is SATVIK_HOME, else `fallback`; loop_home refuses a home inside a git worktree."""
+    lh = _loop_home()
+    home = lh.home(loops=1, fallback=fallback)
+    job_id = lh.new_job_id(name, home_dir=home)
+    return job_id, lh.Lease(home).acquire(job_id), home
+
+
+def _count_429(model, home=None):
+    """One upstream or per-minute 429 for `model`, as the registry counter "429:<model>" (loop_home, step 8). The loop home is the client's
+    job home when it has one (Track L), else SATVIK_HOME, else the repo's _loop, the same fallback p1_claims uses."""
+    source = str(REPO / "scripts" / "source")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    import loop_home
+    loop_home.Registry(home if home is not None else loop_home.home(fallback=REPO / "_loop")).bump("429:" + model)
+
+
+def _load_p1_claims():
+    spec = importlib.util.spec_from_file_location("p1_claims_for_openrouter", REPO / "pieces" / "p1_claims.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_claims = _load_p1_claims()
+FileLock, LedgerError = _claims.FileLock, _claims.LedgerError
+
+
+class OpenRouterError(RuntimeError):
+    """Base class. Messages never contain a key value."""
+
+
+class ModelRefused(OpenRouterError):
+    """Not on the roster, a fallback list, a missing key, or private code without an approved route. Nothing was sent."""
+
+
+class ReplyRejected(OpenRouterError):
+    """The reply counts as nothing: empty, malformed, cut off, or missing its FILE: block or Verdict line."""
+
+
+class QuotaExhausted(OpenRouterError):
+    """The account's free requests for today are used up (a confirmed daily 429, or the local count). Resume after the UTC reset."""
+
+
+class BudgetExceeded(OpenRouterError):
+    """The next call would pass the job's free-request ceiling. Nothing was sent."""
+
+
+class ReviewBudgetExceeded(BudgetExceeded):
+    """A GLM review's worst case would pass the job's review ceiling. Nothing was sent."""
+
+
+class ProviderUnavailable(OpenRouterError):
+    """Timeouts, upstream busy, 5xx, a model that answered as another model, a dropped model, or retries spent."""
+
+
+class _NotSent(ProviderUnavailable):
+    """Refused before the POST (no model slot or no send pace before the deadline): nothing was sent, so a paid hold is released at nothing."""
+
+
+class AccountBlocked(OpenRouterError):
+    """401, 402 or 403: the key or the balance cannot make calls. No retry."""
+
+
+class ModelDenied(OpenRouterError):
+    """HTTP 403 on one model: that model refuses this request. The account is not blocked; the model is dropped for the job."""
+
+
+class _Truncated(ReplyRejected):
+    pass
+
+
+class _TruncatedNoText(_Truncated):
+    """cut off at max_tokens with no message text: a reasoning model spent the budget thinking (R1: retried with reasoning off, same size)."""
+
+
+class _Mismatch(OpenRouterError):
+    pass
+
+
+class RosterRefused(ValueError):
+    """config/roster.json is malformed, names an unknown profile, or the test profile names a paid role or a Claude Code role other than
+    claude_code.TEST_ONLY. Raised while the roster loads: no client exists and no request or call is made. `code` is a stable name for the
+    rule that refused it (stage_config uses its own codes; the roster load keeps "roster-refused")."""
+
+    def __init__(self, message="", code="roster-refused"):
+        super().__init__(message)
+        self.code = code
+
+
+def _check_role(profile, role, spec):
+    where = f"{profile}/{role}"
+    if not isinstance(spec, dict) or any(key not in spec for key in ("model", "provider", "paid", "pricing", "settings")):
+        raise RosterRefused(f"{where}: needs model, provider, paid, pricing and settings")
+    if not isinstance(spec["model"], str) or not spec["model"].strip():
+        raise RosterRefused(f"{where}: model must be a non-empty string")
+    if spec["provider"] is not None and (not isinstance(spec["provider"], dict) or not {"name", "slug"} <= set(spec["provider"])):
+        raise RosterRefused(f"{where}: provider must be null or {{name, slug}}")
+    if not isinstance(spec["paid"], bool):
+        raise RosterRefused(f"{where}: paid must be true or false")
+    if not isinstance(spec["settings"], dict) or any(key not in spec["settings"] for key in SETTING_KEYS):
+        raise RosterRefused(f"{where}: settings must hold {', '.join(SETTING_KEYS)}")
+    if via_of(spec) not in VIAS:
+        raise RosterRefused(f"{where}: via must be {' or '.join(VIAS)} (openrouter when absent)")
+    if via_of(spec) == "claude_code":
+        if spec["model"] in SENTINELS:
+            raise RosterRefused(f"{where}: {spec['model']!r} is not a model, so it has no via")
+        problem = _claude_code().check_role(where, spec)
+        if problem:
+            raise RosterRefused(problem)
+        return
+    if via_of(spec) == "cli_exec":
+        if spec["model"] in SENTINELS:
+            raise RosterRefused(f"{where}: {spec['model']!r} is not a model, so it has no via")
+        problem = _exec_role().check_role(where, spec)
+        if problem:
+            raise RosterRefused(problem)
+        return
+    if "effort" in spec:
+        raise RosterRefused(f"{where}: effort belongs to a claude_code role (an OpenRouter role takes its effort from effort_by_mode)")
+    if spec["paid"] and spec["model"] not in SENTINELS and (spec["provider"] is None or spec["pricing"] is None):
+        raise RosterRefused(f"{where}: a paid OpenRouter role needs a pinned provider and prices")
+
+
+def load_roster_file(path=None):
+    """The profiles in config/roster.json, every role checked. Raises RosterRefused for anything malformed."""
+    return load_roster_data(path)["profiles"]
+
+
+def load_roster_data(path=None):
+    """The whole of config/roster.json (schema_version, revision, profiles), read once and checked as load_roster_file checks it. The stage
+    blocks are checked by stage_config, not here."""
+    try:
+        data = json.loads(Path(path or ROSTER_PATH).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise RosterRefused(f"config/roster.json cannot be read: {exc}") from exc
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        raise RosterRefused("config/roster.json: schema_version must be 1")
+    revision = data.get("revision", 0)
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+        raise RosterRefused("config/roster.json: revision must be a whole number", code="bad-revision")
+    profiles = data.get("profiles")
+    if not isinstance(profiles, dict) or set(profiles) != {"test", "production"}:
+        raise RosterRefused("config/roster.json: profiles must be exactly test and production")
+    for name, profile in profiles.items():
+        roles = profile.get("roles") if isinstance(profile, dict) else None
+        if not isinstance(roles, dict) or not set(ROLE_NAMES) <= set(roles) <= set(ROLE_NAMES) | set(ARBITER_ROLES):
+            raise RosterRefused(f"profile {name}: roles must be exactly {', '.join(ROLE_NAMES)}, plus any of {', '.join(ARBITER_ROLES)}")
+        cap = profile.get("probe_max_tokens")
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap <= 0:
+            raise RosterRefused(f"profile {name}: probe_max_tokens must be a positive whole number")
+        repair_cap = profile.get("repair_max_tokens")
+        if not isinstance(repair_cap, int) or isinstance(repair_cap, bool) or repair_cap <= 0:
+            raise RosterRefused(f"profile {name}: repair_max_tokens must be a positive whole number")
+        effort = profile.get("effort_by_mode")
+        if not isinstance(effort, dict) or set(effort) != set(EFFORT_MODES) or any(v not in EFFORT_VALUES for v in effort.values()):
+            raise RosterRefused(f"profile {name}: effort_by_mode must hold exactly {', '.join(EFFORT_MODES)}, each null, off, low, medium or high")
+        for role, spec in roles.items():
+            _check_role(name, role, spec)
+            if name == "test" and via_of(spec) == "claude_code":         # owner 2026-11-03: one Claude Code model and effort only under test
+                problem = _claude_code().test_profile_problem(f"{name}/{role}", spec)
+                if problem:
+                    raise RosterRefused(problem)
+    return data
+
+
+def probe_max_tokens(profile=None):
+    """The probe's output cap for a profile (default: the active one), from config/roster.json."""
+    return load_roster_file()[profile or active_profile()]["probe_max_tokens"]
+
+
+def repair_max_tokens(profile=None):
+    """The output cap of a writer's repair call for a profile (default: the active one), from config/roster.json. A repair never retries at a bigger size."""
+    return load_roster_file()[profile or active_profile()]["repair_max_tokens"]
+
+
+def effort_for_mode(mode, profile=None):
+    """The reasoning effort a call mode asks for (R1), from config/roster.json effort_by_mode: None keeps the role's own reasoning setting,
+    'off' sends no reasoning field, low/medium/high set the provider's effort. A mode not in the table gets None."""
+    return load_roster_file()[profile or active_profile()]["effort_by_mode"].get(mode)
+
+
+def load_profile(name=None, path=None):
+    """{role: spec} for a profile: the name given, else SATVIK_PROFILE, else test. The test profile refuses any paid role here, before any
+    request can be built."""
+    name = (name or os.environ.get(PROFILE_VAR) or "test").strip()
+    profiles = load_roster_file(path)
+    if name not in profiles:
+        raise RosterRefused(f"unknown profile {name!r}: SATVIK_PROFILE is test (the default) or production")
+    roles = profiles[name]["roles"]
+    if name == "test":
+        paid = sorted(role for role, spec in roles.items() if spec["paid"])
+        if paid:
+            raise RosterRefused(f"the test profile refuses paid roles; the roster names these as paid: {paid}")
+    return roles
+
+
+_ROSTER_STATE = {}                  # profile name -> the tables derived from its roster; keyed by the name, so a changed SATVIK_PROFILE is read again
+
+
+def active_profile():
+    """The profile named by SATVIK_PROFILE, read now (default test). Never cached: the roster is read per call, not at import."""
+    return (os.environ.get(PROFILE_VAR) or "test").strip()
+
+
+def roster_state(profile=None):
+    """The tables for a profile (default: the active one): ROLE_SPECS, ROLES, VIA, PAID, ALLOWED, PINS, PRICING, SETTINGS, PROFILE. Loaded
+    inside this function and cached by profile name, so each profile's roster is checked once and a test can switch profiles with the
+    environment. The OpenRouter tables hold the OpenRouter roles only (no sentinel, no Claude Code role); a model on two roles keeps the
+    entries of the first in ladder order (writers, reviewers, then repair and planner). ALLOWED and PAID also hold the catalog's models
+    (config/models.json, _catalog_tables); CATALOG_PAID names the paid ones, which resolve() takes by exact ID."""
+    name = profile or active_profile()
+    if name not in _ROSTER_STATE:
+        specs = load_profile(name)
+        roles = {role: spec["model"] for role, spec in specs.items()}
+        api = [role for role in WRITER_ROLES + REVIEWER_ROLES + ("repair", "planner") + ARBITER_ROLES
+               if role in roles and roles[role] not in SENTINELS and via_of(specs[role]) == "openrouter"]
+        pins, pricing, settings = {}, {}, {}
+        for r in api:
+            settings.setdefault(roles[r], specs[r]["settings"])                     # model -> its role's settings
+            if specs[r]["paid"]:
+                pins.setdefault(roles[r], specs[r]["provider"])                     # paid model -> {name, slug}
+                pricing.setdefault(roles[r], specs[r]["pricing"])                   # paid model -> USD per token
+        catalog = _catalog_tables(name, set(roles.values()))
+        for model, model_settings in catalog["free"].items():
+            settings.setdefault(model, model_settings)
+        for model, (pin, prices, model_settings) in catalog["paid"].items():
+            pins.setdefault(model, pin)
+            pricing.setdefault(model, prices)
+            settings.setdefault(model, model_settings)
+        _ROSTER_STATE[name] = {
+            "PROFILE": name, "ROLE_SPECS": specs, "ROLES": roles, "VIA": {role: via_of(spec) for role, spec in specs.items()},
+            "PAID": frozenset(roles[r] for r in api if specs[r]["paid"]) | frozenset(catalog["paid"]),
+            "ALLOWED": frozenset(roles[r] for r in api if not specs[r]["paid"]) | frozenset(catalog["free"]),
+            "CATALOG_PAID": frozenset(catalog["paid"]),
+            "PINS": pins, "PRICING": pricing, "SETTINGS": settings,
+        }
+    return _ROSTER_STATE[name]
+
+
+def _catalog_tables(profile, roster_models):
+    """What config/models.json adds to the allow-list (model_catalog.allow_tables): its free models, and under production its paid models
+    that have a pinned provider and prices (reviewer-only, as a paid roster role). A model on the roster keeps its roster entries. A catalog
+    that does not validate is refused like a bad roster."""
+    source = str(REPO / "scripts" / "source")
+    if source not in sys.path:
+        sys.path.insert(0, source)
+    import model_catalog
+    try:
+        return model_catalog.allow_tables(profile, roster_models)
+    except model_catalog.CatalogError as exc:
+        raise RosterRefused(f"config/models.json: {exc}") from exc
+
+
+_ROSTER_NAMES = frozenset({"PROFILE", "ROLE_SPECS", "ROLES", "VIA", "PAID", "ALLOWED", "PINS", "PRICING", "SETTINGS"})
+
+
+def __getattr__(name):
+    """Module attributes for the roster tables, read from the active profile at each access (PEP 562)."""
+    if name in _ROSTER_NAMES:
+        return roster_state()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def redact(text, secrets=()):
+    text = str(text)
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "[REDACTED]")
+    return SECRET_SHAPES.sub("[REDACTED]", text)
+
+
+def utc_day(now):
+    return time.strftime("%Y-%m-%d", time.gmtime(now))
+
+
+def resolve(name):
+    """The roster model for a role name whose role is called through OpenRouter, an exact free roster or catalog ID, or the exact ID of a
+    pinned and priced paid catalog model (production only; reviewer-only in call()). Anything else (a list, a comma list, an alias, a bare
+    paid roster ID, an unpinned paid ID, a sentinel such as non_author_writer, a Claude Code role) is refused before a request is built."""
+    if isinstance(name, str) and (name in ROLE_NAMES or name in ARBITER_ROLES and name in roster_state()["ROLES"]):
+        state = roster_state()
+        roles = state["ROLES"]
+        if roles[name] in SENTINELS:
+            raise ModelRefused(f"{name} is {roles[name]!r} in the {active_profile()} profile, not a model: nothing is called")
+        if state["VIA"][name] != "openrouter":
+            raise ModelRefused(f"{name} is a {state['VIA'][name]} role in the {active_profile()} profile: it is not called through OpenRouter")
+        return roles[name]
+    if isinstance(name, str) and (name in roster_state()["ALLOWED"] or name in roster_state()["CATALOG_PAID"]):
+        return name
+    raise ModelRefused(f"not on the roster: {name!r} (writer or reviewer roles, or exact free roster or catalog IDs only; no fallback lists)")
+
+
+def parse_response(status, raw):
+    """(status, data, message). data is the JSON object or None. An error object inside a body takes that error's code as the status."""
+    text = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
+    try:
+        data = json.loads(text) if text.strip() else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        return status, None, text[:FAILURE_CHARS]
+    err = data.get("error")
+    if isinstance(err, dict):
+        code = err.get("code")
+        status = code if isinstance(code, int) else (status if status != 200 else 502)
+        return status, None, f"{err.get('message') or ''} {json.dumps(err.get('metadata') or {}, sort_keys=True)}"[:FAILURE_CHARS]
+    return status, data, text[:FAILURE_CHARS]
+
+
+def _length(value):
+    return len(value) if isinstance(value, (str, list, dict)) else None
+
+
+def _reasoning_cap(model):
+    """The roster's reasoning.max_tokens for a model (the provider does not enforce it), or None for a model not on the roster."""
+    try:
+        return roster_state()["SETTINGS"][model]["reasoning"]["max_tokens"]
+    except (KeyError, TypeError):
+        return None
+
+
+def reply_facts(data, secrets=(), settings=None):
+    """What a reply says about itself, never its text: finish_reason, the integer usage fields and the reasoning tokens. A reply with no
+    message text (choices[0].message.content is not a string) also keeps the keys of that message (redacted) and the lengths of its reasoning
+    and reasoning_content fields. {} when there is no reply object. `settings` is the call's own settings (a job's stage snapshot); without
+    them the roster's settings for the reply's model give the reasoning cap."""
+    if not isinstance(data, dict):
+        return {}
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+    facts = {"finish_reason": choice.get("finish_reason"), "usage": {k: v for k, v in usage.items() if isinstance(v, int)},
+             "reasoning_tokens": details.get("reasoning_tokens") if isinstance(details.get("reasoning_tokens"), int) else None}
+    if settings is None:
+        cap = _reasoning_cap(data.get("model"))
+    else:
+        reasoning = settings.get("reasoning")
+        cap = reasoning.get("max_tokens") if isinstance(reasoning, dict) else None
+    facts["reasoning_over_cap"] = None if facts["reasoning_tokens"] is None or cap is None else facts["reasoning_tokens"] > cap   # R1: which models ignore the cap
+    if not isinstance(message.get("content"), str):
+        facts["message_keys"] = sorted(redact(str(k), secrets) for k in message)
+        facts["reasoning_len"] = _length(message.get("reasoning"))
+        facts["reasoning_content_len"] = _length(message.get("reasoning_content"))
+    return facts
+
+
+def reply_texts(data):
+    """The raw texts of a reply for the production run's history: its message content (None when there is none) and its reasoning text (reasoning,
+    else reasoning_content; None when there is none). Only the production run writes them, scrubbed, to the job's history/ folder."""
+    choices = data.get("choices") if isinstance(data, dict) else None
+    first = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+    message = first.get("message") if isinstance(first.get("message"), dict) else {}
+    content = message.get("content")
+    reasoning = next((message[k] for k in ("reasoning", "reasoning_content") if isinstance(message.get(k), str) and message[k].strip()), None)
+    return {"reply_text": content if isinstance(content, str) else None, "reasoning_text": reasoning}
+
+
+def classify_429(message):
+    """Which limit a 429 names. Only a message that names the day is the daily limit; anything unclear is treated as a provider error."""
+    text = message.lower()
+    if "per-day" in text or "per day" in text or "daily" in text:
+        return "daily"
+    if "per-min" in text or "per minute" in text or "per-minute" in text:
+        return "minute"
+    return "upstream"
+
+
+def retry_after(headers):
+    try:
+        return max(float((headers or {}).get("retry-after")), 0.0)
+    except (TypeError, ValueError):
+        return None
+
+
+def check_reply(kind, requested, data):
+    """The reply text, or the reason it counts as nothing. kind: text | writer or repair (needs a FILE: block) | reviewer (needs a final Verdict line)."""
+    if data.get("model") != requested:
+        raise _Mismatch(f"reply came from {data.get('model')!r}, not {requested!r}")
+    choices = data.get("choices")
+    choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
+    message = choice.get("message") if choice else None
+    text = message.get("content") if isinstance(message, dict) else None
+    finish = choice.get("finish_reason") if choice else None
+    if finish == "length" and not (isinstance(text, str) and text.strip()):
+        raise _TruncatedNoText("reply cut off at max_tokens with no text (content missing or empty)")
+    if not isinstance(text, str):
+        raise ReplyRejected("malformed reply: no message text")
+    if finish == "length":
+        raise _Truncated("reply cut off at max_tokens")
+    if finish != "stop":
+        raise ReplyRejected(f"finish_reason {finish!r} is not stop")
+    if not text.strip():
+        raise ReplyRejected("empty reply")
+    if kind in ("writer", "repair") and not FILE_BLOCK.search(text):
+        raise ReplyRejected("writer reply has no FILE: block")
+    if kind == "reviewer":
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines or not VERDICT_LINE.match(lines[-1]):
+            raise ReplyRejected("reviewer reply does not end with a '## Verdict: READY' or '## Verdict: FIX FIRST' line")
+    return text
+
+
+def prompt_bound_tokens(system, user):
+    """An upper bound on the prompt tokens of one chat call (I49): one token per UTF-8 byte, since a byte-level tokenizer never needs more
+    tokens than bytes (chars/3 is not a bound for dense or non-Latin text), plus the chat template's framing."""
+    return len((system + user).encode("utf-8", "surrogatepass")) + PROMPT_FRAMING_TOKENS
+
+
+def review_reservation(system, user, max_tokens, prices):
+    """The worst case of one paid call: the prompt bound (prompt_bound_tokens) at the prompt price, plus the whole output allowance at the
+    completion price. `prices` is {"prompt", "completion"} in USD per token: the higher of the roster's and the live endpoint's."""
+    return prompt_bound_tokens(system, user) * prices["prompt"] + max_tokens * prices["completion"]
+
+
+def _reported_cost(data):
+    """usage.cost when the provider reports it, else None."""
+    usage = data.get("usage") if isinstance(data, dict) else None
+    cost = usage.get("cost") if isinstance(usage, dict) else None
+    return float(cost) if isinstance(cost, (int, float)) and not isinstance(cost, bool) else None
+
+
+def review_cost(data, prices):
+    """What a paid reply costs: usage.cost when reported, else its tokens at the roster's prices, else None."""
+    if _reported_cost(data) is not None:
+        return _reported_cost(data)
+    usage = data.get("usage") if isinstance(data, dict) else None
+    if isinstance(usage, dict) and isinstance(usage.get("prompt_tokens"), int) and isinstance(usage.get("completion_tokens"), int):
+        return usage["prompt_tokens"] * prices["prompt"] + usage["completion_tokens"] * prices["completion"]
+    return None
+
+
+class JobBudget:
+    """Per-job ceilings. Every free attempt counts. The GLM reviews share one review ceiling: each call's worst case is reserved before it is
+    sent; what its reply reports (or the whole reservation when no reply came) is kept as spent."""
+
+    def __init__(self, free_requests=JOB_FREE_REQUESTS, review_usd=JOB_REVIEW_USD):
+        self.free_requests, self.review_usd = free_requests, review_usd
+        self.free_used, self.review_reserved, self.review_spent = 0, 0.0, 0.0
+
+    def check_free(self):
+        if self.free_used >= self.free_requests:
+            raise BudgetExceeded("free requests for this job are used up")
+
+    def check_review(self, estimate, ceiling=None):
+        """Refuses a reservation that would pass the job's review ceiling, or the approved paid ceiling of its snapshot (`ceiling`, when given:
+        the lower of the two applies, I44)."""
+        limit = self.review_usd if ceiling is None else min(self.review_usd, ceiling)
+        if self.review_spent + self.review_reserved + estimate > limit + 1e-12:
+            raise ReviewBudgetExceeded(f"the review worst case ${estimate:.6f} would pass the job's review ceiling ${limit:.6f}; not sent")
+
+    def reserve_review(self, estimate, ceiling=None):
+        self.check_review(estimate, ceiling)
+        self.review_reserved += estimate
+
+    def settle_review(self, reserved, spent):
+        self.review_reserved -= reserved
+        self.review_spent += spent
+
+
+class Breaker:
+    """Per job: BREAKER_LIMIT provider errors in a row drop a model. A good answer resets its count."""
+
+    def __init__(self):
+        self.streak = {}
+
+    def open(self, model):
+        return self.streak.get(model, 0) >= BREAKER_LIMIT
+
+    def failed(self, model):
+        self.streak[model] = self.streak.get(model, 0) + 1
+
+    def ok(self, model):
+        self.streak[model] = 0
+
+    def drop(self, model):
+        self.streak[model] = BREAKER_LIMIT
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def default_transport(method, url, headers, body, timeout):
+    route = os.environ.get("SAP_DIRECT_ROUTE", "")
+    if re.fullmatch(r"[a-z]+_direct", route):          # owner 2026-11-16: roster models listed in config/direct_route.json go to their own host (the named module); anything else falls through
+        source = str(REPO / "scripts" / "source")
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        sent = importlib.import_module(route).maybe_send(method, url, body, timeout)
+        if sent is not None:
+            return sent
+    req = urllib.request.Request(url, data=body, headers=headers or {}, method=method)
+    try:
+        with _OPENER.open(req, timeout=timeout) as resp:
+            return resp.status, dict(resp.headers), resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, dict(exc.headers or {}), exc.read()
+
+
+def _served_by(headers):
+    """The x-served-by response header (lowercased by _post), stripped; None when absent or empty."""
+    value = str((headers or {}).get("x-served-by") or "").strip()
+    return value or None
+
+
+def load_keys(secrets_dir=None, environ=None):
+    """{"free": ..., "paid": ...} from an environment variable, else a file in secrets/. Values are never printed or logged."""
+    env = os.environ if environ is None else environ
+    folder = Path(secrets_dir) if secrets_dir else REPO / "secrets"
+    keys = {}
+    for slot, (var, filename) in KEY_FILES.items():
+        value = (env.get(var) or "").strip()
+        path = folder / filename
+        if not value and path.is_file():
+            value = path.read_text(encoding="utf-8").strip()
+        if value:
+            keys[slot] = value
+    if ("free" in keys) != ("paid" in keys):          # one key serves both roles (owner 2026-11-02): the paid allowlist and dollar budget still apply
+        only = keys.get("free") or keys.get("paid")
+        keys = {"free": only, "paid": only}
+    return keys
+
+
+def live_free_cap(payload):
+    """The account's daily free allowance from a GET /api/v1/key payload: free_model_daily_requests.limit, when it is a positive whole number.
+    None when the field or its limit is missing or unusable, so the fallback cap applies. The key's own top-level limit is not this allowance."""
+    data = payload.get("data") if isinstance(payload, dict) else None
+    quota = data.get("free_model_daily_requests") if isinstance(data, dict) else None
+    limit = quota.get("limit") if isinstance(quota, dict) else None
+    return limit if isinstance(limit, int) and not isinstance(limit, bool) and limit > 0 else None
+
+
+def _save_snapshot(folder, slot, stamp, payload):
+    """One key's full GET /api/v1/key JSON, kept as evidence under key_snapshots/."""
+    with open(os.path.join(folder, f"key_snapshot_{slot}_{stamp}.json"), "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=2, sort_keys=True)
+
+
+class OpenRouter:
+    """One job's client. `call` returns (text, info) and raises an OpenRouterError subclass for anything that does not count."""
+
+    def __init__(self, keys, ledger_dir, budget=None, transport=None, clock=time.time, sleep=time.sleep, rand=random.random,
+                 approved_private=APPROVED_PRIVATE):
+        self.keys = {slot: value for slot, value in dict(keys).items() if value}
+        self._secrets = list(self.keys.values())
+        self.ledger_dir = str(ledger_dir)     # holds the key snapshots only: the free count is the shared ledger (shared_limits)
+        os.makedirs(self.ledger_dir, exist_ok=True)
+        self.budget = budget or JobBudget()
+        self.breaker = Breaker()
+        self.transport = transport or default_transport
+        self.clock, self.sleep, self.rand = clock, sleep, rand
+        self.approved_private = frozenset(approved_private)
+        self._endpoints = {}
+        self._endpoint_at = {}              # model -> the clock time its pinned endpoint was read (ENDPOINT_MAX_AGE_S)
+        self.failed_attempts = []           # every failed attempt: model, HTTP status (None for a network error), first 2000 chars of its message, reply_facts
+        self.requests = []                  # every request sent, failed or not: model, status, failed, seconds, reply_facts (production writes each as call_NN.json)
+        self.retry_log = []                 # every retry: model, the attempt it starts, the wait in seconds, the error (scrubbed); the job's status keeps it
+        self.deadline_at = None             # the unit deadline on this client's clock; no retry may start after it (set_job_deadline)
+        self.shared = None                  # (job_id, generation) once set_job puts this client on the account ledger (package E)
+        self.shared_home = None             # the loop home that job lives in (None: SATVIK_HOME)
+        self.owned_lease = False            # True when this client took its own lease (own_job): release_job releases it
+        self.on_wait = None                 # the job's execution owner's hook: called with {why, since, model} when a wait begins, None when it ends
+        self._stage = None                  # the stage spec of the call in progress (call(stage=...)), None for a roster call
+
+    def _settings_of(self, model):
+        """The settings of the call in progress: its stage spec's when it has one, else the roster's for the model."""
+        if self._stage is not None and self._stage["model"] == model:
+            return self._stage["settings"]
+        return roster_state()["SETTINGS"][model]
+
+    def _pin_of(self, model):
+        if self._stage is not None and self._stage["model"] == model:
+            return self._stage.get("provider") if self._stage.get("paid") else None
+        return roster_state()["PINS"].get(model)
+
+    def _pricing_of(self, model):
+        if self._stage is not None and self._stage["model"] == model:
+            return self._stage["pricing"]
+        return roster_state()["PRICING"][model]
+
+    def set_job_deadline(self, seconds):
+        """The unit deadline, `seconds` from now. p1b_production sets it just before the unit's walk starts."""
+        self.deadline_at = self.clock() + seconds
+
+    def set_job(self, job_id, gen, home=None):
+        """Puts every request on the account ledger (shared_limits, package E) under this job and generation: reserve, pace and the model
+        slot are taken there. Without it the client keeps its own ledger (the probe and the older tests use that)."""
+        self.shared = (job_id, gen)
+        self.shared_home = home
+
+    def own_job(self, name, fallback):
+        """Takes a job and its own lease on the loop home (shared_job) and puts the client on it. release_job releases that lease again, so a
+        finished job leaves no live lease behind (found in the 2-loop and 4-loop tests: one unreleased lease per job)."""
+        job_id, gen, home = shared_job(name, fallback)
+        self.set_job(job_id, gen, home)
+        self.owned_lease = True
+
+    def release_job(self):
+        """Releases the lease own_job took (a lease the launcher owns is left alone). Safe to call more than once."""
+        if not self.owned_lease or self.shared is None:
+            return False
+        self.owned_lease = False
+        return _loop_home().Lease(self.shared_home).release(*self.shared)
+
+    @contextlib.contextmanager
+    def waiting(self, why, model):
+        """A real wait, reported to the job's owner (on_wait): set when the wait begins, cleared when it ends, on errors too. why: model-slot,
+        account-pace, 429-backoff or retry-backoff. It explains a wait; whether a process is alive is still the lease's job."""
+        hook = self.on_wait
+        if hook is not None:
+            hook({"why": why, "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "model": model})
+        try:
+            yield
+        finally:
+            if hook is not None:
+                hook(None)
+
+    def _deadline_left(self):
+        return None if self.deadline_at is None else self.deadline_at - self.clock()
+
+    def _err(self, cls, message):
+        return cls(redact(message, self._secrets))
+
+    def _log_retry(self, model, attempt, seconds, text):
+        self.retry_log.append({"model": model, "attempt": attempt, "wait_s": round(float(seconds), 3),
+                               "error": redact(str(text), self._secrets)[:300]})
+
+    def _check_retry_fits(self, model, message):
+        """Before a reviewer's 429 retry: the job's free-request count and the account's daily count must leave room for one more request."""
+        if self.budget.free_used >= self.budget.free_requests:
+            raise self._err(ProviderUnavailable, f"{model}: the job's free requests are used up; the retry is not sent; last 429: {message[:300]}")
+        if self.shared is not None:
+            day = _shared_limits().usage(self.shared_home)
+            if day["free_today"] >= day["free_cap"]:
+                raise self._err(QuotaExhausted, f"{model}: free requests for today are used up; the retry is not sent; last 429: {message[:300]}")
+
+    def _reviewer_window_wait(self, model, started, used, floor, message, attempt):
+        """One upstream 429 on a reviewer call: wait the next step of REVIEWER_429_WAITS_S (plus jitter, or Retry-After when longer), then retry.
+        The window is used up after its last step, or when the next wait would pass the model's roster timeout_s from the call's start; the model
+        is then dropped for the job. A stop for the unit deadline, or for the job's free-request or daily count, raises without dropping the model."""
+        review_timeout = self._settings_of(model)["timeout_s"]
+        if used >= len(REVIEWER_429_WAITS_S):
+            self.breaker.drop(model)
+            raise self._err(ProviderUnavailable, f"{model}: still rate-limited upstream (429) after {used} retries; the window is used up; last 429: {message[:300]}")
+        seconds = max(REVIEWER_429_WAITS_S[used] + self.rand(), floor or 0.0)
+        if self.clock() - started + seconds > review_timeout:
+            self.breaker.drop(model)
+            raise self._err(ProviderUnavailable, f"{model}: the next wait ({seconds:.0f} s) would pass the {review_timeout} s review timeout; the window is used up; last 429: {message[:300]}")
+        if self.deadline_at is not None and self.clock() + seconds > self.deadline_at:
+            raise self._err(ProviderUnavailable, f"{model}: the next retry would start after the unit deadline; last 429: {message[:300]}")
+        self._check_retry_fits(model, message)
+        self._log_retry(model, attempt, seconds, message)
+        with self.waiting("429-backoff", model):
+            self.sleep(seconds)
+
+    def _keep_request(self, model, status, seconds, data=None, served_by=None):
+        """Keeps one request the client sent, failed or not: its raw HTTP status (None for a network error), its seconds, and reply_facts.
+        served_by (2026-11-16): the response's x-served-by header, when the provider sent one; the key is left out otherwise."""
+        record = {"model": model, "status": status, "failed": False, "seconds": round(float(seconds), 3), **self._facts(model, data)}
+        if _reported_cost(data) is not None:      # 2026-11-18 (audit defect 3): usage.cost as the reply reports it; the key is left out when none is reported
+            record["cost_usd"] = _reported_cost(data)
+        if served_by:
+            record["served_by"] = served_by
+        self.requests.append(record)
+
+    def _facts(self, model, data):
+        stage = self._stage if self._stage is not None and self._stage["model"] == model else None
+        return reply_facts(data, self._secrets, stage["settings"] if stage else None)
+
+    def _note(self, model, status, message, data=None, request=True):
+        """Keeps one failed attempt: its raw HTTP status (None for a network error), its message (redacted, cut to FAILURE_CHARS) and reply_facts.
+        A chat attempt comes right after its request (_keep_request), which it marks failed; the endpoint price read is no chat request (request=False)."""
+        self.failed_attempts.append({"model": model, "status": status, "message": redact(str(message), self._secrets)[:FAILURE_CHARS],
+                                     "facts": self._facts(model, data)})
+        if request:
+            self.requests[-1]["failed"] = True
+
+    def _last_failures(self, model):
+        """The last BREAKER_LIMIT raw failures of a model, for the error that drops it."""
+        mine = [f for f in self.failed_attempts if f["model"] == model][-BREAKER_LIMIT:]
+        return " | ".join(f"HTTP {f['status']}: {f['message'][:300]}" if f["status"] is not None else f"no HTTP status: {f['message'][:300]}" for f in mine)
+
+    def failures_for(self, model):
+        return [f for f in self.failed_attempts if f["model"] == model]
+
+
+    def _worst_prices(self, model):
+        """The prices a paid reservation is priced at (I49): the higher of the roster's (or the snapshot's) and the live endpoint's, per token.
+        Refuses (nothing is sent) when either is unknown: a paid call is never priced at a guess."""
+        roster = self._pricing_of(model)
+        if not isinstance(roster, dict) or roster.get("prompt") is None or roster.get("completion") is None:
+            raise self._err(ModelRefused, f"{model} has no known prices in the roster or snapshot; nothing is sent")
+        live = self.endpoint(model)
+        return {"prompt": max(float(roster["prompt"]), live["prompt"]), "completion": max(float(roster["completion"]), live["completion"])}
+
+    def _known_prices(self, model):
+        """The prices already read for a paid model (the roster's and, when read, the pinned endpoint's): used to book a reply that reports no
+        cost. Never a network read, so it cannot fail after a call was sent."""
+        prices = dict(self._pricing_of(model) or {})
+        live = self._endpoints.get(model)
+        if live is not None:
+            prices = {"prompt": max(float(prices.get("prompt") or 0.0), live["prompt"]), "completion": max(float(prices.get("completion") or 0.0), live["completion"])}
+        return prices
+
+    def endpoint(self, model):
+        """The paid model's Z.AI endpoint, read live (once per ENDPOINT_MAX_AGE_S): per-token prices and the slug the requests are pinned to.
+        A reply from any other provider is refused in call()."""
+        if model in self._endpoints and self.clock() - self._endpoint_at.get(model, 0.0) < ENDPOINT_MAX_AGE_S:
+            return self._endpoints[model]
+        self._endpoints.pop(model, None)
+        pin = self._pin_of(model)
+        if pin is None:
+            raise self._err(ModelRefused, f"{model} has no pinned provider in the roster; nothing is sent")
+        status, _, raw = self.transport("GET", f"{API}/models/{model}/endpoints", {}, None, 60)
+        _, data, message = parse_response(status, raw)
+        body = data.get("data") if isinstance(data, dict) else None
+        endpoints = body.get("endpoints", []) if isinstance(body, dict) else []
+        if status != 200 or not isinstance(endpoints, list):
+            self._note(model, status, message, request=False)
+            raise self._err(ProviderUnavailable, f"endpoint prices for {model} unavailable: HTTP {status} {message[:200]}")
+        pinned = None
+        for ep in endpoints:
+            if not isinstance(ep, dict) or ep.get("provider_name") != pin["name"]:
+                continue
+            if str(ep.get("tag") or "").split("/")[0] != pin["slug"]:
+                continue
+            pricing = ep.get("pricing") if isinstance(ep.get("pricing"), dict) else {}
+            try:
+                pinned = {"slug": pin["slug"], "name": pin["name"],
+                          "prompt": float(pricing["prompt"]), "completion": float(pricing["completion"])}
+            except (KeyError, TypeError, ValueError):
+                pinned = None
+            break
+        if pinned is None:
+            raise self._err(ProviderUnavailable, f"no priced {pin['name']} endpoint for {model}; the review is refused (no other provider is used)")
+        self._endpoints[model] = pinned
+        self._endpoint_at[model] = self.clock()
+        return pinned
+
+    def _key_payload(self, slot):
+        """The full GET /api/v1/key JSON for a loaded slot (no completion call)."""
+        status, _, raw = self.transport("GET", f"{API}/key", {"Authorization": "Bearer " + self.keys[slot]}, None, 30)
+        _, data, message = parse_response(status, raw)
+        if status != 200 or not isinstance(data, dict) or not isinstance(data.get("data"), dict):
+            raise self._err(OpenRouterError, f"key state unavailable: HTTP {status} {message[:200]}")
+        return data
+
+    def key_info(self, slot):
+        return self._key_payload(slot)["data"]
+
+    def begin_job(self):
+        """Before each job: saves every loaded key's full JSON under key_snapshots/, and records the day's free cap on the shared ledger
+        (shared_limits) from the free key's free_model_daily_requests.limit (live_free_cap). A free-key read that fails, or a payload without
+        that limit, records the fallback cap (shared_limits.FREE_DAILY_CAP) and the job goes on. Returns a summary with no key values; its
+        "free" entry names the cap in force and its source ("live" or "fallback")."""
+        stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.clock()))
+        folder = os.path.join(self.ledger_dir, "key_snapshots")
+        os.makedirs(folder, exist_ok=True)
+        summary = {}
+        for slot in self.keys:
+            if slot == "free":
+                summary[slot] = self._begin_free(folder, stamp)
+                continue
+            _save_snapshot(folder, slot, stamp, self._key_payload(slot))
+            summary[slot] = {"saved": True}
+        return summary
+
+    def _begin_free(self, folder, stamp):
+        """The free key's part of begin_job: its snapshot and the day's cap read from it. A failed read keeps no snapshot and records the fallback."""
+        try:
+            payload = self._key_payload("free")
+        except OpenRouterError as exc:
+            cap = self._record_free_cap(None)
+            return {"saved": False, "quota": "unavailable", **cap, "note": f"key state unavailable, so the fallback cap applies: {exc}"}
+        _save_snapshot(folder, "free", stamp, payload)
+        live = live_free_cap(payload)
+        cap = self._record_free_cap(live)
+        if live is not None:
+            return {"saved": True, "quota": "provider", **cap, "note": "free_model_daily_requests.limit is the day's cap"}
+        absent = payload["data"].get("free_model_daily_requests") is None
+        reason = "free_model_daily_requests absent" if absent else "free_model_daily_requests has no usable limit"
+        return {"saved": True, "quota": "local", **cap, "note": f"{reason}: the fallback cap applies"}
+
+    def _record_free_cap(self, live):
+        """Writes the day's free cap to the shared ledger: `live` (the account's allowance) or None for the fallback. A client with no job yet
+        takes one first, as its first free call does, so the cap lands on the loop home. Returns {"cap", "cap_source"} for what now applies."""
+        if self.shared is None:
+            self.own_job("openrouter-client", self.ledger_dir)
+        recorded = _shared_limits().record_free_cap(live, home_dir=self.shared_home)
+        return {"cap": recorded["cap"], "cap_source": recorded["source"]}
+
+    def call(self, name, system, user, kind="text", private=False, max_tokens=None, timeout_s=None, effort=None, stage=None):
+        """One checked answer from a roster model: (text, info). kind: text, writer, repair or reviewer (see check_reply). The model's settings
+        come from its roster role; the retry values apply to writer calls only. A repair call uses the roster's repair_max_tokens and never retries at a bigger size. effort: a reasoning effort for a free call (None keeps the
+        role's setting, 'off' sends none); a cut-off reply with no text is retried with reasoning off at the same size (R1).
+
+        stage: a resolved stage spec from the job's frozen snapshot (stage_config.call_spec): {model, via, settings, paid, provider, pricing}.
+        With it the model, settings, pin and prices come from the spec, not from the roster read now, so a roster edit during the job changes
+        nothing here; a repair spec already holds the repair output cap as its max_tokens. Without it the call is the roster call above."""
+        if kind not in ("text", "writer", "reviewer", "repair"):
+            raise ValueError(f"unknown reply kind {kind!r}")
+        if stage is None:
+            return self._call(name, system, user, kind, private, max_tokens, timeout_s, effort)
+        if stage.get("model") in SENTINELS or not isinstance(stage.get("model"), str):
+            raise ModelRefused(f"{name} is {stage.get('model')!r} in the job's stage snapshot, not a model: nothing is called")
+        if stage.get("via", "openrouter") != "openrouter":
+            raise ModelRefused(f"{name} is a {stage.get('via')} stage in the job's snapshot: it is not called through OpenRouter")
+        self._check_stage_billing(name, stage)
+        self._stage = stage
+        try:
+            return self._call(name, system, user, kind, private, max_tokens, timeout_s, effort)
+        finally:
+            self._stage = None
+
+    def _call(self, name, system, user, kind, private, max_tokens, timeout_s, effort):
+        stage = self._stage
+        model = resolve(name) if stage is None else stage["model"]
+        if private and model not in self.approved_private:
+            raise self._err(ModelRefused, f"private code is blocked: no approved non-training route for {model}")
+        if stage is None:
+            slot = "paid" if model in roster_state()["PAID"] else "free"
+        else:
+            slot = "paid" if stage.get("paid") else "free"
+        if slot == "paid" and kind != "reviewer":
+            raise self._err(ModelRefused, f"{model} is the GLM reviewer: it takes reviewer calls only, so this {kind} call is refused before any request")
+        if slot not in self.keys:
+            raise self._err(ModelRefused, f"no {slot} key loaded, so {model} is not called")
+        settings = self._settings_of(model)
+        retry = settings if kind == "writer" else {}           # retry values belong to writer calls only
+        started = self.clock()
+        if max_tokens is not None:
+            tokens = max_tokens
+        elif kind == "repair" and stage is None:
+            tokens = repair_max_tokens()
+        else:
+            tokens = settings["max_tokens"]
+        timeout = timeout_s if timeout_s is not None else settings["timeout_s"]
+        attempts, retries, truncations, window = 0, 0, 0, 0     # window: upstream 429 retries a reviewer call has used (REVIEWER_429_WAITS_S)
+        while True:
+            if attempts and retry.get("retry_timeout_s"):
+                timeout = retry["retry_timeout_s"]
+            if self.breaker.open(model):
+                raise self._err(ProviderUnavailable,
+                                f"{model} dropped for this job after {BREAKER_LIMIT} provider errors in a row; last: {self._last_failures(model)}")
+            attempts += 1
+            hold = self._reserve(model, slot, system, user, tokens)
+            sent = self.clock()
+            try:
+                status, headers, raw = self._send(model, slot, system, user, tokens, private, timeout, effort)
+            except _NotSent:                                        # nothing was posted: a paid hold is released at what it cost (nothing)
+                self._settle_unsent(slot, model, hold)
+                raise
+            except (OSError, http.client.HTTPException) as exc:       # refused, reset, timed out (socket.timeout is an OSError)
+                self._keep_request(model, None, self.clock() - sent)
+                self._note(model, None, f"{type(exc).__name__}: {exc}")
+                self.breaker.failed(model)
+                self._settle(slot, model, hold, None)
+                self._wait_before_retry(model, retries, self._backoff_s(retries, None), f"{type(exc).__name__}: {exc}", attempts + 1)
+                retries += 1
+                continue
+            http_status = status                                  # the raw HTTP status; parse_response may replace it with a body error code
+            status, data, message = parse_response(status, raw)
+            self._keep_request(model, http_status, self.clock() - sent, data, served_by=_served_by(headers))
+            if kind in ("writer", "repair", "reviewer"):
+                self.requests[-1].update(reply_texts(data))   # the raw texts, kept before check_reply so a rejected reply (a review with no verdict line too) is still on record
+            spent = self._settle(slot, model, hold, data)
+            if status == 200:
+                if data is None:
+                    self._note(model, 200, f"malformed reply: not a JSON object: {message}")
+                    raise self._err(ReplyRejected, f"{model}: malformed reply (not a JSON object)")
+                pin_name = self._pin_of(model)["name"] if slot == "paid" else None
+                if slot == "paid" and data.get("provider") != pin_name:
+                    self._note(model, 200, f"reply came from provider {data.get('provider')!r}", data)
+                    self.breaker.failed(model)
+                    raise self._err(ProviderUnavailable, f"{model}: reply came from provider {data.get('provider')!r}, not {pin_name!r}")
+                try:
+                    text = check_reply(kind, model, data)
+                except _TruncatedNoText as exc:             # R1: the budget went to thinking; the same size with reasoning off, not a bigger budget
+                    self._note(model, 200, str(exc), data)
+                    if truncations == TRUNCATION_RETRIES or slot == "paid":
+                        raise self._err(ReplyRejected, f"{model}: reply cut off at max_tokens={tokens} with no text")
+                    truncations += 1
+                    effort = "off"
+                    continue
+                except _Truncated as exc:
+                    self._note(model, 200, str(exc), data)
+                    if truncations == TRUNCATION_RETRIES or slot == "paid" or kind == "repair":
+                        raise self._err(ReplyRejected, f"{model}: reply cut off at max_tokens={tokens}")
+                    truncations += 1
+                    tokens = retry.get("retry_max_tokens") or min(tokens * 2, settings["max_tokens_cap"])
+                    continue
+                except _Mismatch as exc:
+                    self._note(model, 200, str(exc), data)
+                    self.breaker.failed(model)
+                    raise self._err(ProviderUnavailable, f"{model}: {exc}")
+                except ReplyRejected as exc:
+                    self._note(model, 200, str(exc), data)
+                    raise self._err(ReplyRejected, f"{model}: {exc}")
+                self.breaker.ok(model)
+                return text, self._info(model, data, spent, attempts, tokens, started)
+            if status == 429:
+                self._note(model, http_status, message)
+                limit = classify_429(message)
+                if limit == "daily":
+                    raise self._err(QuotaExhausted, f"{model}: daily free limit reached: {message[:200]}")
+                _count_429(model, self.shared_home)     # upstream or per-minute only; a daily 429 stops above and is not counted
+                if limit == "minute":
+                    self._wait_before_retry(model, retries, retry_after(headers) or MINUTE_WAIT_DEFAULT_S, "rate limited per minute", attempts + 1)
+                    retries += 1
+                elif kind in ("reviewer", "writer", "repair"):    # upstream 429: its own window (R1: writers get it too); these do not count toward the breaker
+                    self._reviewer_window_wait(model, started, window, retry_after(headers), message, attempts + 1)
+                    window += 1
+                else:
+                    self.breaker.failed(model)
+                    self._wait_before_retry(model, retries, self._backoff_s(retries, retry_after(headers)), "provider rate limited upstream", attempts + 1)
+                    retries += 1
+                continue
+            if status == 403:
+                self._note(model, http_status, message)
+                self.breaker.drop(model)
+                raise self._err(ModelDenied, f"{model}: HTTP 403: {message[:200]}")
+            if status in (401, 402):
+                self._note(model, http_status, message)
+                raise self._err(AccountBlocked, f"{model}: HTTP {status}: {message[:200]}")
+            if status >= 500:
+                self._note(model, http_status, message)
+                self.breaker.failed(model)
+                self._wait_before_retry(model, retries, self._backoff_s(retries, None), f"HTTP {status}", attempts + 1)
+                retries += 1
+                continue
+            self._note(model, http_status, message)
+            raise self._err(OpenRouterError, f"{model}: HTTP {status}: {message[:200]}")
+
+    def _ceiling(self):
+        """The approved paid ceiling of the call in progress (its stage snapshot's paid_ceiling_usd), None for a roster call or a snapshot
+        without one (then the job's own review budget is the only limit)."""
+        if self._stage is None:
+            return None
+        return self._stage.get("ceiling_usd")
+
+    def _check_stage_billing(self, name, stage):
+        """A stage's billing class, pin and prices must be the selected model's (I36), as config/models.json and the roster name them. Refused
+        before any reservation or request: a stage that says free for a paid model, or the reverse, or a pin or price the model does not have,
+        nothing is sent."""
+        model = stage["model"]
+        ro = roster_state()
+        if model not in ro["PAID"] and model not in ro["ALLOWED"]:
+            raise self._err(ModelRefused, f"{name}: {model} is not on the allow-list (roster or config/models.json); nothing is sent")
+        paid_now = model in ro["PAID"]
+        if bool(stage.get("paid")) != paid_now:
+            raise self._err(ModelRefused, f"{name}: the stage says paid={bool(stage.get('paid'))} but {model} is paid={paid_now}; nothing is sent")
+        if not paid_now:
+            return
+        pin = ro["PINS"].get(model)
+        if pin is None or stage.get("provider") != pin:
+            raise self._err(ModelRefused, f"{name}: the stage's provider pin does not match {model}'s pinned provider; nothing is sent")
+        prices = stage.get("pricing")
+        if not isinstance(prices, dict) or not all(isinstance(prices.get(k), (int, float)) and prices[k] >= 0 for k in ("prompt", "completion")):
+            raise self._err(ModelRefused, f"{name}: the stage has no usable prices for {model}; nothing is sent")
+
+    def _reserve(self, model, slot, system, user, tokens):
+        """Takes this attempt's budget before anything is sent (a _Hold). Free: the job count, then the account's daily count on the shared
+        ledger; the minute pace is taken later, right before the POST, inside the model slot (_pace). Paid: the worst case at the higher of
+        the roster's and the live endpoint's prices, refused when it would pass the job's review budget or the approved ceiling (I44, I49)."""
+        if slot == "free" and self.shared is None:      # solo, probe and tests: a job on the loop home, so the call counts on the shared ledger
+            self.own_job("openrouter-client", self.ledger_dir)
+        if self.shared is not None:
+            return self._reserve_shared(model, slot, system, user, tokens)
+        if slot == "paid":
+            return self._reserve_paid(model, system, user, tokens)
+        raise AssertionError("unreachable: a free call always takes the shared ledger")
+
+    def _reserve_paid(self, model, system, user, tokens):
+        """The paid worst case (the endpoint is read first; a refused price read sends nothing). The cheap check on the roster price comes
+        before the endpoint is read, as before."""
+        ceiling = self._ceiling()
+        self.budget.check_review(review_reservation(system, user, tokens, self._pricing_of(model)), ceiling)   # refused before any read
+        estimate = review_reservation(system, user, tokens, self._worst_prices(model))
+        self.budget.reserve_review(estimate, ceiling)
+        return _Hold(estimate, None)
+
+    def _reserve_shared(self, model, slot, system, user, tokens):
+        """The account ledger (package E). Free: the job's count and the day's count. Paid: the job's budget, then one hold on the ledger under
+        its own call id (reserve_review), which settle or reconciliation releases."""
+        sl = _shared_limits()
+        job_id, gen = self.shared
+        home = self.shared_home
+        if slot == "paid":
+            ceiling = self._ceiling()
+            self.budget.check_review(review_reservation(system, user, tokens, self._pricing_of(model)), ceiling)
+            estimate = review_reservation(system, user, tokens, self._worst_prices(model))
+            self.budget.reserve_review(estimate, ceiling)
+            try:
+                call_id = sl.reserve_review(job_id, gen, estimate, home_dir=home, ceiling_usd=ceiling)
+            except sl.ReviewCapReached as exc:
+                self.budget.settle_review(estimate, 0.0)
+                raise self._err(ReviewBudgetExceeded, str(exc))
+            return _Hold(estimate, call_id)
+        self.budget.check_free()
+        try:
+            sl.reserve_free_day(job_id, gen, home_dir=home)
+        except sl.DailyCapReached as exc:
+            raise self._err(QuotaExhausted, str(exc))
+        self.budget.free_used += 1
+        return _Hold(0.0, None)
+
+    def _pace(self, model, slot):
+        """The account's send pace, taken immediately before the POST (I48): the pace record is written at the send, not when the call
+        queued. A wait that would pass the unit deadline is refused as not sent."""
+        sl = _shared_limits()
+        try:
+            with self.waiting("account-pace", model):
+                sl.pace(timeout_s=self._deadline_left(), home_dir=self.shared_home)
+        except TimeoutError as exc:
+            what = "the account minute window stayed full until the unit deadline" if slot == "free" else "no send pace before the unit deadline"
+            raise self._err(_NotSent, f"{model}: {what} ({exc})")
+
+    def _send(self, model, slot, system, user, tokens, private, timeout_s, effort=None):
+        """_post, inside the model's slot on the account ledger when the client is on it, and the account pace taken after the slot is held and
+        right before the POST. The waits for the slot and the pace are bounded by the unit deadline, so they count against the job's time. A
+        refusal here raises _NotSent: nothing was posted."""
+        if self.shared is None:
+            return self._post(model, slot, system, user, tokens, private, timeout_s, effort)
+        sl = _shared_limits()
+        job_id, gen = self.shared
+        try:
+            sl.slot_name(model)
+        except ValueError as exc:
+            raise self._err(ModelDenied, str(exc))
+        left = self._deadline_left()
+        if left is not None and left <= 0:
+            raise self._err(_NotSent, f"{model}: the unit deadline passed before a slot was free")
+        slot_cm = sl.model_slot(model, gen, timeout_s if left is None else left, home_dir=self.shared_home)
+        try:
+            with self.waiting("model-slot", model):           # cleared the moment the slot is acquired, before the request is sent
+                slot_cm.__enter__()
+        except TimeoutError as exc:
+            raise self._err(_NotSent, f"{model}: no free model slot before the unit deadline ({exc})")
+        try:
+            self._pace(model, slot)
+            return self._post(model, slot, system, user, tokens, private, timeout_s, effort)
+        finally:
+            slot_cm.__exit__(None, None, None)
+
+    def _settle(self, slot, model, hold, data):
+        """A free attempt costs what its reply reports (0 when it reports nothing). A paid attempt releases its hold and keeps what the reply
+        costs (at the known prices when the reply reports no cost); with no reply, the whole hold is kept as spent."""
+        if slot == "free":
+            return _reported_cost(data) or 0.0
+        spent = review_cost(data, self._known_prices(model)) if data is not None else None
+        if spent is None:
+            spent = hold.amount
+        self.budget.settle_review(hold.amount, spent)
+        if self.shared is not None:
+            job_id, gen = self.shared
+            _shared_limits().settle_review(job_id, gen, hold.amount, spent, home_dir=self.shared_home, call_id=hold.call_id)
+        return spent
+
+    def _settle_unsent(self, slot, model, hold):
+        """A paid hold whose call was never posted (the slot or the pace was refused): released at nothing spent. A free attempt keeps its
+        daily count (conservative: the count is never handed back)."""
+        if slot != "paid":
+            return
+        self.budget.settle_review(hold.amount, 0.0)
+        if self.shared is not None:
+            job_id, gen = self.shared
+            _shared_limits().settle_review(job_id, gen, hold.amount, 0.0, home_dir=self.shared_home, call_id=hold.call_id)
+
+    def _post(self, model, slot, system, user, tokens, private, timeout_s, effort=None):
+        settings = self._settings_of(model)
+        body = {"model": model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                "max_tokens": tokens, "temperature": settings["temperature"], "usage": {"include": True}}     # 2026-11-18 (audit defect 3): the reply reports usage.cost, kept per call
+        if settings["reasoning"] is not None:
+            body["reasoning"] = dict(settings["reasoning"])
+        if settings["sampling"]:
+            body.update(settings["sampling"])
+        if slot == "free" and effort is not None:       # R1: the mode's effort replaces the role's reasoning; "off" is an explicit switch
+            body["reasoning"] = {"enabled": False} if effort == "off" else {"effort": effort}   # no field would mean the provider's default, usually on
+        if slot == "paid":                              # a paid role's request never asks for more than its roster max_tokens
+            body["max_tokens"] = min(tokens, settings["max_tokens"])
+        provider = {}
+        if private:
+            provider["data_collection"] = "deny"
+        if slot == "paid":
+            provider.update(order=[self._endpoints[model]["slug"]], only=[self._endpoints[model]["slug"]], allow_fallbacks=False)
+        if provider:
+            body["provider"] = provider
+        headers = {"Authorization": "Bearer " + self.keys[slot], "Content-Type": "application/json"}
+        status, raw_headers, raw = self.transport("POST", f"{API}/chat/completions", headers, json.dumps(body).encode("utf-8"), timeout_s)
+        return status, {k.lower(): v for k, v in dict(raw_headers or {}).items()}, raw
+
+    def _backoff_s(self, retries, floor):
+        return max(BACKOFF_S[min(retries, len(BACKOFF_S) - 1)] + self.rand(), floor or 0.0)
+
+    def _wait_before_retry(self, model, retries, seconds, why, attempt):
+        if retries >= MAX_RETRIES:
+            raise self._err(ProviderUnavailable, f"{model}: {why}; gave up after {retries + 1} attempts")
+        if seconds > MAX_WAIT_S:
+            raise self._err(ProviderUnavailable, f"{model}: {why}; asked to wait {seconds:.0f} s, which is longer than {MAX_WAIT_S:.0f} s")
+        self._log_retry(model, attempt, seconds, why)
+        with self.waiting("429-backoff" if "429" in str(why) or "rate limited" in str(why) else "retry-backoff", model):
+            self.sleep(seconds)
+
+    def _info(self, model, data, spent, attempts, tokens, started):
+        usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        endpoint = self._endpoints.get(model)
+        details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+        reasoning = details.get("reasoning_tokens") if isinstance(details.get("reasoning_tokens"), int) else None
+        return {"model": model, "provider": data.get("provider"), "endpoint": endpoint["slug"] if endpoint else None,
+                "status": 200, "finish": "stop", "usage": {k: v for k, v in usage.items() if isinstance(v, int)},
+                "reasoning_tokens": reasoning, "cost_usd": spent, "latency_s": round(self.clock() - started, 3),
+                "attempts": attempts, "max_tokens": tokens}
+
+
+PROBE_SYSTEM = "You are a connectivity check. Answer exactly as instructed."
+PROBE_USER = "Reply with the single word OK."
+
+
+def probe_roles() -> list[str]:
+    """The probe names, from the active roster profile (read per call): every writer and reviewer role whose model is a real free OpenRouter
+    model (no sentinel, no paid role, no Claude Code role). The paid reviewer (GLM in production) is never probed, so the probe spends nothing."""
+    state = roster_state()
+    return [r for r in WRITER_ROLES + REVIEWER_ROLES
+            if state["ROLES"][r] not in SENTINELS and not state["ROLE_SPECS"][r]["paid"] and state["VIA"][r] == "openrouter"]
+
+
+def probe(client, out_path=None, names=None):
+    """One live call per roster model (kind text), plus each loaded key's state before and after. `names` limits the run to some of the
+    probe names. The summary holds no key value; every failed attempt is kept in full (status and first 2000 characters)."""
+    def key_states():
+        return {slot: {k: v for k, v in client.key_info(slot).items() if k in KEY_FIELDS} for slot in client.keys}
+
+    before = key_states()
+    results = {}
+    targets = probe_roles()
+    if names is not None:
+        targets = [t for t in targets if t in names]
+    for name in targets:
+        model = resolve(name)
+        try:
+            text, info = client.call(name, PROBE_SYSTEM, PROBE_USER, kind="text", max_tokens=probe_max_tokens())
+            results[name] = dict(info, ok=True, reply=text.strip()[:60], failed_attempts=client.failures_for(model))
+        except OpenRouterError as exc:
+            results[name] = {"model": model, "ok": False, "error": str(exc), "failed_attempts": client.failures_for(model)}
+    summary = {"probed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(client.clock())), "key_before": before,
+               "key_after": key_states(), "probes": results}
+    if out_path:
+        Path(out_path).write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    return summary
+
+
+def main(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser(description="OpenRouter adapter: one live call per roster model (P1a evidence).")
+    ap.add_argument("command", choices=["probe"])
+    ap.add_argument("--out", help="also write the JSON summary to this file")
+    ap.add_argument("--ledger", default=str(REPO / "_loop" / "openrouter"))
+    ap.add_argument("--models", help="comma list of probe names to run (the probe roles of the active profile); default all")
+    args = ap.parse_args(argv)
+    names = [m.strip() for m in args.models.split(",") if m.strip()] if args.models else None
+    if names is not None and not set(names) & set(probe_roles()):
+        print(f"no matching role: {args.models!r}; probe roles in the {active_profile()} profile: {', '.join(probe_roles())}", file=sys.stderr)
+        return 2
+    keys = load_keys()
+    if not keys:
+        print("no key found: set OPENROUTER_FREE_KEY and/or OPENROUTER_PAID_KEY, or put them in secrets/", file=sys.stderr)
+        return 2
+    try:
+        summary = probe(OpenRouter(keys, args.ledger), args.out, names)
+    except OpenRouterError as exc:
+        print(f"probe stopped: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0 if all(p.get("ok") for p in summary["probes"].values()) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

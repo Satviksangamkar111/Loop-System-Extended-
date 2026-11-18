@@ -1,0 +1,21 @@
+{
+  "note": "Roster model ids that scripts/source/nvidia_direct.py sends straight to NVIDIA (owner 2026-11-16): the roster id, the id NVIDIA serves, and whether thinking runs (false sends chat_template_kwargs enable_thinking=false; null leaves the model's default). Active only with SAP_DIRECT_ROUTE=nvidia_direct.",
+  "models": {
+    "nvidia/nemotron-3.5-super-vl:free": {
+      "id": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+      "thinking": false
+    },
+    "nvidia/nemotron-3-ultra-550b-a55b:free": {
+      "id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "thinking": null
+    },
+    "mistralai/mistral-large-4-1t-a52b": {
+      "id": "mistralai/mistral-large-4-1t-a52b",
+      "thinking": null
+    },
+    "stepfun-ai/step-5-preview": {
+      "id": "stepfun-ai/step-5-preview",
+      "thinking": null
+    }
+  }
+}

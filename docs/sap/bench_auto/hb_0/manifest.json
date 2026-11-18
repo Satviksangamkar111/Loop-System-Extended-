@@ -1,0 +1,62 @@
+{
+ "schema": 1,
+ "id": "hb_0",
+ "repo": "timkoehne/LLM-Benchmark-ABAP-Code-Generation",
+ "pr": 0,
+ "base_sha": "6898edf",
+ "merge_sha": "6898edf",
+ "label": "BENCHMARK",
+ "ticket_source": "benchmark_prompt",
+ "production_file": "src/z_humaneval_000.clas.abap",
+ "work_file": "abap_work/hb_0/z_humaneval_000.clas.abap",
+ "original_sha256": "ec02ca374ae029726d826a3f4f75e0cf84ac9a25e3fe9864393f5c2588b0fe11",
+ "test_files": [
+  {
+   "path": "src/z_humaneval_000.clas.testclasses.abap",
+   "stored": "tests_upstream/z_humaneval_000.clas.testclasses.abap",
+   "sha256": "4a6a1ccca29bf1e7f97309235b03c91684ad82e586835ae18be9b14f43eeaeb5",
+   "new_methods": [
+    "test_case_1",
+    "test_case_2",
+    "test_case_3",
+    "test_case_4",
+    "test_case_5",
+    "test_case_6",
+    "test_case_7"
+   ],
+   "heldout_methods": [
+    "test_case_2",
+    "test_case_4",
+    "test_case_6"
+   ]
+  }
+ ],
+ "allowed_methods": [
+  "has_close_elements"
+ ],
+ "runner": {
+  "project": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_0",
+  "project_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_0",
+  "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\libs",
+  "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools",
+  "config": "abap_transpile.json",
+  "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps",
+  "only_object": "Z_HUMANEVAL_000"
+ },
+ "gate": {
+  "base_transpiles": true,
+  "base_fails": [
+   "test_case_1",
+   "test_case_3",
+   "test_case_5",
+   "test_case_6"
+  ],
+  "heldout_fails_on_base": false,
+  "heldout_failing_methods": [
+   "test_case_6"
+  ],
+  "fix_passes": true,
+  "checked_utc": "2026-11-18T13:01:41.353830+00:00"
+ },
+ "created_utc": "2026-11-18T13:01:41.353884+00:00"
+}

@@ -1,0 +1,110 @@
+{
+  "name": "bench-A",
+  "profile": "production",
+  "visibility": "public",
+  "spec": "docs/sap/bench/A/SPEC.md",
+  "files": [
+    "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap"
+  ],
+  "tests": [
+    "tests/acceptance/sap_A_acceptance.py"
+  ],
+  "acceptance_tests": [
+    "tests/acceptance/sap_A_acceptance.py"
+  ],
+  "reference": [
+    "docs/sap/bench/A/REFERENCE.md"
+  ],
+  "writer_reference": true,
+  "negative_controls": [
+    {
+      "name": "no_replace",
+      "replace": {
+        "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap": "tests/controls/sap_A_no_replace.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_A_acceptance.py::test_text_with_windows_line_endings_is_not_binary",
+        "tests/acceptance/sap_A_acceptance.py::test_multiline_windows_text_is_not_binary"
+      ]
+    },
+    {
+      "name": "always_text",
+      "replace": {
+        "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap": "tests/controls/sap_A_always_text.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_A_acceptance.py::test_many_control_characters_is_binary",
+        "tests/acceptance/sap_A_acceptance.py::test_some_control_characters_is_binary"
+      ]
+    },
+    {
+      "name": "high_threshold",
+      "replace": {
+        "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap": "tests/controls/sap_A_high_threshold.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_A_acceptance.py::test_some_control_characters_is_binary"
+      ]
+    },
+    {
+      "name": "newline_twice",
+      "replace": {
+        "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap": "tests/controls/sap_A_newline_twice.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_A_acceptance.py::test_text_with_windows_line_endings_is_not_binary"
+      ]
+    },
+    {
+      "name": "collateral",
+      "replace": {
+        "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap": "tests/controls/sap_A_collateral.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_A_acceptance.py::test_nothing_outside_is_binary_changed"
+      ]
+    },
+    {
+      "name": "syntax_broken",
+      "replace": {
+        "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap": "tests/controls/sap_A_syntax_broken.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_A_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    },
+    {
+      "name": "kernel_poc",
+      "replace": {
+        "abap_work/abapgit_A/zcl_abapgit_utils.clas.abap": "tests/controls/sap_A_kernel_poc.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_A_acceptance.py::test_text_with_windows_line_endings_is_not_binary",
+        "tests/acceptance/sap_A_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    }
+  ],
+  "acceptance_baseline_fail": [
+    "tests/acceptance/sap_A_acceptance.py::test_text_with_windows_line_endings_is_not_binary",
+    "tests/acceptance/sap_A_acceptance.py::test_multiline_windows_text_is_not_binary"
+  ],
+  "fixers": [
+    "writer_a",
+    "writer_b"
+  ],
+  "reviewers": "by_lineage",
+  "budget": {
+    "free_requests": 40,
+    "review_usd": 0.05,
+    "paid_usd": 0
+  },
+  "deadline_min": 60,
+  "sandbox_include": [
+    "scripts",
+    "tests",
+    "abap_work",
+    "config",
+    "docs"
+  ],
+  "writer_edit": true
+}

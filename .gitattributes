@@ -1,0 +1,3 @@
+# SAP extension files: keep line endings exactly as written (the ABAP files are compared and hashed byte for byte)
+*.abap -text
+docs/sap/run_log.jsonl -text

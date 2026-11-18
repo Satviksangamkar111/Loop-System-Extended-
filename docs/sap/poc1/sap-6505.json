@@ -1,0 +1,78 @@
+{
+ "name": "sap-6505",
+ "profile": "production",
+ "visibility": "public",
+ "spec": "docs/sap/poc1/SPEC.md",
+ "files": [
+  "abap_work/abapgit_6505/zcl_abapgit_sap_package.clas.abap"
+ ],
+ "tests": [
+  "tests/acceptance/sap_6505_acceptance.py"
+ ],
+ "acceptance_tests": [
+  "tests/acceptance/sap_6505_acceptance.py"
+ ],
+ "negative_controls": [
+  {
+   "name": "or_fix",
+   "replace": {
+    "abap_work/abapgit_6505/zcl_abapgit_sap_package.clas.abap": "tests/controls/sap_6505_or_fix.abap"
+   },
+   "must_fail": [
+    "tests/acceptance/sap_6505_acceptance.py::test_dollar_and_t_packages_are_not_recorded"
+   ]
+  },
+  {
+   "name": "only_t",
+   "replace": {
+    "abap_work/abapgit_6505/zcl_abapgit_sap_package.clas.abap": "tests/controls/sap_6505_only_t.abap"
+   },
+   "must_fail": [
+    "tests/acceptance/sap_6505_acceptance.py::test_dollar_and_t_packages_are_not_recorded"
+   ]
+  },
+  {
+   "name": "too_broad",
+   "replace": {
+    "abap_work/abapgit_6505/zcl_abapgit_sap_package.clas.abap": "tests/controls/sap_6505_too_broad.abap"
+   },
+   "must_fail": [
+    "tests/acceptance/sap_6505_acceptance.py::test_customer_packages_are_still_recorded"
+   ]
+  },
+  {
+   "name": "collateral",
+   "replace": {
+    "abap_work/abapgit_6505/zcl_abapgit_sap_package.clas.abap": "tests/controls/sap_6505_collateral.abap"
+   },
+   "must_fail": [
+    "tests/acceptance/sap_6505_acceptance.py::test_nothing_else_in_the_file_changed"
+   ]
+  }
+ ],
+ "acceptance_baseline_fail": [
+  "tests/acceptance/sap_6505_acceptance.py::test_dollar_and_t_packages_are_not_recorded"
+ ],
+ "fixers": [
+  "writer_a",
+  "writer_b"
+ ],
+ "reviewers": "by_lineage",
+ "budget": {
+  "free_requests": 40,
+  "review_usd": 0.05,
+  "paid_usd": 0
+ },
+ "deadline_min": 60,
+ "sandbox_include": [
+  "scripts",
+  "tests",
+  "abap_work",
+  "config",
+  "docs"
+ ],
+ "reference": [
+  "docs/sap/poc1/REFERENCE.md"
+ ],
+ "writer_reference": true
+}

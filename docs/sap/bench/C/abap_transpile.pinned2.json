@@ -1,0 +1,39 @@
+{
+  "input_folder": "src",
+  "input_filter": [
+    "zcl_excel_common",
+    "zcx_excel",
+    "zabap2xlsx",
+    "zexcel_.*\\.(dtel|doma|tabl|ttyp)\\.xml$",
+    "\\.msag\\.xml$"
+  ],
+  "output_folder": "output",
+  "libs": [
+    {
+      "folder": "../libs/open-abap-core"
+    },
+    {
+      "folder": "../libs/open-abap-gui"
+    },
+    {
+      "folder": "../libs/express-icf-shim"
+    },
+    {
+      "folder": "../libs/open-abap-seo"
+    }
+  ],
+  "write_unit_tests": true,
+  "write_source_map": true,
+  "options": {
+    "ignoreSyntaxCheck": true,
+    "addFilenames": true,
+    "addCommonJS": true,
+    "unknownTypes": "runtimeError",
+    "keywords": [
+      "return",
+      "in",
+      "class",
+      "arguments"
+    ]
+  }
+}

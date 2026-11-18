@@ -1,0 +1,7 @@
+secrets/
+_loop/
+.env
+__pycache__/
+.pytest_cache/
+docs/sap/knowledge/user_supplied/*
+!docs/sap/knowledge/user_supplied/README.md

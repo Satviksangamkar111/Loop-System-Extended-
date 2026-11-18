@@ -1,0 +1,18 @@
+{
+  "docs/sap/bench/B/SPEC.md": "ffa486fe64d4cbc19320957926eac38d99b13782b55709c66c727e67b409f8f5",
+  "docs/sap/bench/B/abap_transpile.pinned2.json": "4b443cdc89798745578377803747ac68b9dfc697b93bb3f57352e68b7788f2b5",
+  "docs/sap/bench/B/hidden_tests.clas.testclasses.abap": "55211b174dda8d4fbc707ebc74630219f4eb7689b03dd7e21df0b45c48fe2879",
+  "docs/sap/bench/B/runner.json": "925cdccaf43d6ee0992e2634be0a88c80e96ddb4159e9d36733c6794bc420c49",
+  "tests/acceptance/sap_B_acceptance.py": "59e332d5753fa8b1afa392b62e77391f85c5a4ea4aaca89ece1958b224718c90",
+  "tests/controls/sap_B_alt_guard.abap": "2c796e3700a34587a99f3b7538f1acee5d1ca6ffc3a6e4ac80366363c875942a",
+  "tests/controls/sap_B_always_zero.abap": "34995b3c8c0ea1b793c8937dad3f5ef0d1dcfc88f37760df477821daf427e335",
+  "tests/controls/sap_B_catch_gives_one.abap": "bc420841b856e608561cbb6d47944c5acc3e956ad573bf80609627041582219f",
+  "tests/controls/sap_B_collateral.abap": "fa86b76f522c987f8044a199f3549b04098a9ab8e4965a610a61ca9de175febd",
+  "tests/controls/sap_B_kernel_poc.abap": "5b271232869d7c9013b96517d040b2850499fa1cdc9a67e32ca3731c948a678e",
+  "tests/controls/sap_B_original.abap": "22ded26364687fbf24b6b0d4550596ca306ae48a5631d77d96ec505cfdae69d5",
+  "tests/controls/sap_B_rule_removed.abap": "140bda501110e934ffd2b27aacc5759db34d6c90604403b627306e759af4cbdb",
+  "tests/controls/sap_B_special_case_values.abap": "8af66f3a331d5184fb3912f8cee962a8a9addff22731cc6b705bf93b060644b2",
+  "tests/controls/sap_B_syntax_broken.abap": "008f087ce487c66dcd4f22e4d7e63d81b6bf19d05f523b66774ce84973380302",
+  "tests/controls/sap_B_upstream_fix.abap": "0629c98cb7837ddcefdc1500582b51054433df015c379dacb43cba6a55006448",
+  "tests/controls/sap_B_wrong_exception.abap": "c80798d0eeb06b0d4aad8a34ea060066495ac683ee308ec06666914644ecb0d3"
+}

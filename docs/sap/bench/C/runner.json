@@ -1,0 +1,18 @@
+{
+  "project_dir": "C:\\__NO_ABAP_RUNTIME__\\projects\\C_project_838",
+  "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\libs",
+  "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools",
+  "config": "test/abap_transpile.pinned2.json",
+  "only_object": "ZCL_EXCEL_COMMON",
+  "only_methods": [
+    "shift_old_behaviour",
+    "shift_signed_row",
+    "shift_blank_preservation",
+    "shift_sheet_names",
+    "shift_range_name_f_1",
+    "shift_rc_in_string",
+    "shift_quoted_sheet_a1",
+    "shift_subtotal_table_ref"
+  ],
+  "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps"
+}

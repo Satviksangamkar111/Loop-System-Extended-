@@ -1,0 +1,790 @@
+"""P1b routing (final roster, 2026-11-02): the production ladder, per-file lineage, the review panel (North first, then GLM; the free writer that
+did not write the code takes North's place when North wrote it or is down), the FIX FIRST evidence rule, the repair-step gate, job-size and
+settings checks, and the unit deadline. Pure logic: models are injected through a small interface, so every rule runs with scripted fake models
+and no network.
+
+Injected `models` interface:
+  call(model_id, mode, files) -> dict {path: text} for mode write/repair; str for mode review/review-reask. Raises ModelFailed when the
+      provider is down or the repair step is unavailable (its `reason` names the escalation), BadReply when the reply cannot be used, and
+      BudgetStop when a GLM review would pass the review ceiling. GLM only ever reviews; the repair step is called with the name ANTHROPIC.
+  write(reply) -> puts a validated reply's files on disk (walk calls it after take() accepts the reply, before tests).
+  tests(files) -> Result (green, failing test ids, failing files, systemic).
+  restore() -> puts the job's original files back before a fresh write.
+  restore_green() -> puts the job files of the last green run back (a FIX FIRST repair that turned the tests red is undone).
+  stage_fix(findings) -> the stripped FIX FIRST findings ("file:line | requirement | one sentence") the next repair call carries to the writer.
+  reject(model, mode, reason) -> a writer reply the job cannot use (a file outside the job, or a fresh write missing job files) is recorded
+      as a failed call before BadReply is raised (Production records it with HTTP status 200 and the reason as its message).
+  package -> {"files": {path: lines}, "spec_count": n}: the review package of the last review call (evidence_ok checks a FIX FIRST against it).
+  call(arbiter, "arbiter", files, slot=role, claims=...) -> str: the arbiter's reply (2026-11-16); the arbiter is an optional roster role (ARBITER_ROLES).
+  arbitrated(record) -> optional: one arbiter decision (the claims, the rulings, the outcome), kept by the production runner as ARBITER.md.
+
+Only the roster's exact IDs appear here. The owner's roster is read from openrouter_call, never copied, so there is one place to change it."""
+import contextvars
+import json
+import re
+import time
+from collections import namedtuple
+from pathlib import Path
+
+import openrouter_call as oc
+
+# The job's own roles view while walk() runs: {role: {"model", "paid", ...}} from its frozen stage snapshot, or a function returning it (the
+# models object's ladder_roles). A context variable, so two jobs on two threads each see their own; None means the roster (roster_state).
+_JOB_ROLES = contextvars.ContextVar("p1b_job_roles", default=None)
+
+
+def _roles_view(snapshot=None):
+    source = snapshot if snapshot is not None else _JOB_ROLES.get()
+    view = source() if callable(source) else source
+    return view
+
+
+def _m(role, snapshot=None):
+    """The model for a role: from `snapshot` (a roles view) when given, else from the running job's snapshot (set by walk), else the roster
+    read from the active profile at call time."""
+    view = _roles_view(snapshot)
+    if view is not None:
+        return view[role]["model"]
+    return oc.roster_state()["ROLES"][role]
+
+
+_ROLE_NAMES = {"DOTS": "writer_a", "XING": "writer_b", "NORTH": "reviewer_b", "GLM": "reviewer_a"}
+
+
+def __getattr__(name):
+    """DOTS, XING, NORTH and GLM are read from the active profile's roster at each access (PEP 562)."""
+    if name in _ROLE_NAMES:
+        return _m(_ROLE_NAMES[name])
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+ANTHROPIC = "anthropic"             # the repair step's name in the lineage and the steps; its call lives in the isolated repair module
+REPAIR_TIMEOUT_S = 900              # the repair step's call timeout (the repair module's TIMEOUT_S): a repair starts only when this much of the unit deadline is left
+DEADLINES_MIN = (60, 120)
+UNIT_LINES, FILE_LINES = 1500, 800
+# Opt-in override for one benchmark run (bench C: a 1565-line class); the defaults above stay the rule.
+import os as _os
+UNIT_LINES = int(_os.environ.get("SAP_UNIT_LINES", UNIT_LINES))
+FILE_LINES = int(_os.environ.get("SAP_FILE_LINES", FILE_LINES))
+FREE_REQUESTS = 40
+
+
+def budget_for(profile=None):
+    """The job budget the profile requires: review_usd is exactly 0 under test and exactly 0.05 under production (owner 2026-11-02)."""
+    return {"free_requests": FREE_REQUESTS, "review_usd": oc.JOB_REVIEW_USD_BY_PROFILE[profile or oc.PROFILE], "paid_usd": 0}
+REPAIR_CALLS = 3                    # per job: at most three repair-step calls in the red loop (after the writers); a fourth is never attempted
+FIX_ROUNDS = 3                      # per job: at most three FIX FIRST rounds are repaired, on their own budget; a further FIX FIRST ends review-fix (review-open)
+TRIM_CHARS = 32000                  # pytest output fed back to a writer: about 8K tokens
+
+Result = namedtuple("Result", "green failing failing_files systemic")
+Outcome = namedtuple("Outcome", "status reason failing findings", defaults=((), ()))
+STREAK = 3                          # the same failing-test set in this many test runs in a row ends the job needs_review
+FILE_LINE = re.compile(r"([\w./\\-]+\.\w+):(\d+)")
+CITE = re.compile(r"\b(SPEC|CHECK) (\d+)\b")
+CITE_TOKEN = re.compile(r"\[?\s*\b(?:SPEC|CHECK) \d+(?:\.\d+)*\s*\]?:?")
+CHECKS = 5                          # CHECK 1 to 5 in the review package
+LINEAGE_SCHEMA_VERSION = 1
+VERDICT = re.compile(r"^## Verdict: (READY|FIX FIRST)$")
+
+
+class ModelFailed(Exception):
+    """A provider refused or stayed down for this call. `reason` is the escalation reason a repair-step failure carries (None otherwise)."""
+
+    def __init__(self, message="", reason=None):
+        super().__init__(message)
+        self.reason = reason
+
+
+class JobRefused(ValueError):
+    pass
+
+
+class JobTooLarge(ValueError):
+    pass
+
+
+class Blocked(Exception):
+    """Mixed or missing lineage, or a lineage row with no reviewer table entry."""
+
+
+class BadReply(Exception):
+    """A reply that cannot be used: outside the job's files, or missing one on a fresh write."""
+
+
+class BudgetStop(Exception):
+    """A GLM review would pass the job's review ceiling: nothing was sent. The job ends budget-exceeded."""
+
+
+class QuotaStop(Exception):
+    """The adapter raised QuotaExhausted: the day's free requests are used up. The job ends quota-exhausted; no further call is made."""
+
+
+class StopRequested(Exception):
+    """The stop switch (home/STOP) is on. Raised before a new model step or a retry (I38): a call already in flight finishes, nothing new starts.
+    The production runner ends the job "stopped" and restores its files. fix_loop re-exports this class, so one name serves both modules."""
+
+
+
+
+class Lineage:
+    """Per job file: the writer that last wrote it, the origin (the writer of the last fresh write), and the chain of writers since that fresh
+    write ("anthropic" for a repair step). `served` (I46, 2026-11-04) is kept beside the rows: for each path, the ACTUAL model identities that
+    contributed to its current bytes since the fresh write (every writer and every repair step, as the call reported them). A repair step's chain
+    entry stays "anthropic"; its served identities are the models that really ran. The review panel excludes every one of them."""
+
+    def __init__(self):
+        self._rows = {}
+        self._served = {}
+
+    def set(self, path, last, origin, chain=None, served=None):
+        self._rows[path] = {"last": last, "origin": origin, "chain": list(chain) if chain is not None else [origin]}
+        if served is not None:
+            self._served[path] = list(served)
+        elif path not in self._served:
+            self._served[path] = list(self._rows[path]["chain"])      # no identity recorded: the chain is all there is to go on
+
+    def get(self, path):
+        return self._rows.get(path)
+
+    def served(self, path):
+        """The served model identities of a path's current bytes (a copy)."""
+        return list(self._served.get(path, []))
+
+    def contributors(self, files):
+        """Every model identity that contributed to the given job files: each row's origin and the union of their served identities."""
+        out = set()
+        for path in files:
+            row = self._rows.get(path)
+            if row is not None:
+                out.add(row["origin"])
+                out.update(self.served(path))
+        return out
+
+    def save(self, path):
+        """The file holds one row per job file, the served identities under "served", and "schema_version": 1 at the top level (a file with no
+        version is read as version 1)."""
+        Path(path).write_text(json.dumps(dict(self._rows, served=self._served, schema_version=LINEAGE_SCHEMA_VERSION), indent=2, sort_keys=True),
+                              encoding="utf-8")
+
+    @classmethod
+    def load(cls, path):
+        lineage = cls()
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        version = data.pop("schema_version", LINEAGE_SCHEMA_VERSION)
+        if version != LINEAGE_SCHEMA_VERSION:
+            raise ValueError(f"lineage schema_version {version!r} is not {LINEAGE_SCHEMA_VERSION}")
+        lineage._served = data.pop("served", {})
+        lineage._rows = data
+        return lineage
+
+
+def check_production_job(job, profile=None):
+    """Role names only; the owner's settings for a production unit. The budget is the profile's (budget_for): test 0, production 0.05."""
+    wanted = budget_for(profile)
+    if job.get("profile") != "production" or job.get("visibility") != "public":
+        raise JobRefused("production jobs must be profile production and visibility public")
+    if not isinstance(job.get("fixers"), list) or any(role not in ("writer_a", "writer_b") for role in job["fixers"]):
+        raise JobRefused("fixers must be a list of the role names writer_a and writer_b (never a model ID)")
+    if job.get("reviewers") != "by_lineage":
+        raise JobRefused('reviewers must be "by_lineage"')
+    budget = job.get("budget")
+    if not isinstance(budget, dict) or budget != wanted or any(isinstance(v, bool) for v in budget.values()):
+        raise JobRefused(f"budget must be exactly {wanted}")
+    if job.get("deadline_min") not in DEADLINES_MIN:
+        raise JobRefused(f"deadline_min must be one of {DEADLINES_MIN}")
+
+
+def check_job_size(lines):
+    """lines: {editable path: line count}. At most 800 lines per file and 1,500 per unit."""
+    for path, count in lines.items():
+        if count > FILE_LINES:
+            raise JobTooLarge(f"{path} has {count} lines; the limit is {FILE_LINES} per file (split it first)")
+    total = sum(lines.values())
+    if total > UNIT_LINES:
+        raise JobTooLarge(f"the unit has {total} editable lines; the limit is {UNIT_LINES} per unit (the planner splits it)")
+
+
+def _path(raw):
+    return raw.replace("\\", "/").removeprefix("./")
+
+
+def _findings(text, package):
+    """The evidence-backed findings of a review: one (path, line, kind, n, sentence) per valid SPEC n or CHECK n on a line that names a file:line
+    of a file in the package (line within that file's length). A line with no such file:line, or no cite in range, is not evidence and is
+    dropped. `package` is {"files": {path: lines}, "spec_count": n}."""
+    files, spec_count = package["files"], package["spec_count"]
+    out = []
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("-*").strip()
+        place = next(((_path(p), int(n)) for p, n in FILE_LINE.findall(line) if _path(p) in files and 1 <= int(n) <= files[_path(p)]), None)
+        if place is None:
+            continue
+        for kind, num in CITE.findall(line):
+            if 1 <= int(num) <= (spec_count if kind == "SPEC" else CHECKS):
+                out.append((place[0], place[1], kind, int(num), _sentence(line)))
+    return out
+
+
+def _sentence(line):
+    """The reviewer's first sentence about the defect, with the file:line and the cite tokens removed."""
+    rest = " ".join(CITE_TOKEN.sub(" ", FILE_LINE.sub(" ", line, count=1)).split()).lstrip(" :-[]()")
+    return (re.split(r"(?<=[.!?])\s", rest, maxsplit=1)[0] if rest else "(no description)")[:300]
+
+
+def _requirement(kind, num, package):
+    """The SPEC line (or CHECK line) a finding breaks, from the review package."""
+    if kind == "CHECK":
+        checks = package.get("checks") or []
+        return checks[num - 1] if num <= len(checks) else f"CHECK {num}"
+    spec = package.get("spec") or []
+    return f"SPEC {num}: {spec[num - 1]}" if num <= len(spec) else f"SPEC {num}"
+
+
+def strip_findings(text, package):
+    """The repair note of a review: one line per valid finding, `file:line | the SPEC or CHECK line | one sentence`. Nothing else of the
+    reviewer's text is kept, so no opinion and no evidence-free line reaches the writer."""
+    return [f"{path}:{line} | {_requirement(kind, num, package)} | {sentence}" for path, line, kind, num, sentence in _findings(text, package)]
+
+
+def _path_of(note):
+    """The file of a repair note line (`file:line | ...`)."""
+    return note.split(" | ", 1)[0].rsplit(":", 1)[0]
+
+
+def evidence_ok(text, package):
+    """A FIX FIRST counts only with at least one finding that has BOTH a file:line naming a file in the package (line no greater than that
+    file's length) AND a SPEC n (n within the spec's requirement count) or CHECK n (n from 1 to 5) on the same line (see _findings)."""
+    return bool(_findings(text, package))
+
+
+def verdict_of(text):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    match = VERDICT.match(lines[-1]) if lines else None
+    return match.group(1) if match else None
+
+
+def trim_tail(text, limit=TRIM_CHARS):
+    return text[-limit:] if len(text) > limit else text
+
+
+def backup_writer(origin, excluded=(), writers=None, contributors=()):
+    """The free writer that did not write the code, is not excluded (down, or already on this panel), and did not contribute to the code (I46:
+    a repair step served by a writer's model makes that model a contributor)."""
+    writers = (_m("writer_a"), _m("writer_b")) if writers is None else writers
+    barred = {origin} | set(contributors)
+    for writer in writers:
+        if writer not in barred and writer not in excluded:
+            return writer
+    raise oc.ProviderUnavailable("no second independent reviewer is available (provider-unavailable)")
+
+
+def panel_for(origin, unavailable=(), specs=None, contributors=()):
+    """The reviewers for a job's code whose fresh writer was `origin`, from the roster's reviewer roles in panel order: the free reviewer
+    (reviewer_b) first, then reviewer_a (the paid reviewer, or the non_author_writer role of the test profile). A slot takes the free writer
+    that did not write the code (backup_writer) when its model is the author or a contributor (I46), is down, or is the non_author_writer role;
+    a paid slot is never replaced (a paid contributor blocks the panel). The paid reviewer is last, so it is called only after the first reviewer
+    says READY. No contributing model is ever on its own panel. `contributors`: the served identities of every model that contributed to the code
+    (Lineage.contributors). `specs` defaults to the running job's snapshot roles (walk), else the roster."""
+    if specs is None:
+        specs = _roles_view() or oc.ROLE_SPECS
+    models = {role: spec["model"] for role, spec in specs.items()}
+    writers = (models["writer_a"], models["writer_b"])
+    if origin not in writers + (models["reviewer_b"],):
+        raise Blocked(f"no reviewer row for code whose origin is {origin}")
+    testing = _os.environ.get("SAP_ALLOW_DUPLICATE_MODELS") == "1"      # 2026-11-18: owner's testing exception: the panel may hold the code's own model; such a run is NOT an independent panel
+    barred = set() if testing else {origin} | set(contributors)
+    down = set(unavailable)
+    panel = []
+    for role in oc.REVIEWER_ROLES:
+        spec = specs[role]
+        taken = set(panel) | down
+        if spec["model"] in barred and spec["paid"]:
+            raise Blocked(f"the paid reviewer {spec['model']} contributed to this code: no independent reviewer (panel for {origin})")
+        if spec["model"] == oc.NON_AUTHOR_WRITER or (not spec["paid"] and (spec["model"] in barred or spec["model"] in down)):
+            panel.append(backup_writer(origin, taken, writers, contributors))
+        else:
+            panel.append(spec["model"])
+    if not testing and (any(model in barred for model in panel) or len(set(panel)) != len(panel)):
+        raise Blocked(f"panel for {origin} is not independent: {panel}")
+    return panel
+
+
+def _paid_reviewers():
+    """The models of the reviewer roles marked paid, however they are called (OpenRouter or Claude Code): panel_for never replaces such a slot,
+    so a failure there has no substitute either."""
+    specs = _roles_view() or oc.ROLE_SPECS
+    return {specs[role]["model"] for role in oc.REVIEWER_ROLES if specs[role]["paid"] and specs[role]["model"] not in oc.SENTINELS}
+
+
+def _origin(lineage, files):
+    rows = []
+    for path in files:
+        row = lineage.get(path)
+        if row is None:
+            raise Blocked(f"no lineage recorded for {path}")
+        rows.append(row)
+    origins = {row["origin"] for row in rows}
+    if len(origins) != 1:
+        raise Blocked(f"mixed lineage: the job files have origins {sorted(origins)}; blocked")
+    return origins.pop()
+
+
+def panel_for_files(lineage, files, unavailable=()):
+    return panel_for(_origin(lineage, files), unavailable=unavailable, contributors=lineage.contributors(files))
+
+
+def _served_of(models, model):
+    """The served model identities of the call that just wrote for `model`, as a list. A models object without them (the test fakes, a legacy
+    caller) is taken as the model itself."""
+    view = getattr(models, "served_identities", None)
+    return list(view(model)) if view is not None else [model]
+
+
+def _gate(result, failing, seconds_left, down=()):
+    """The repair step runs only for a confirmed defect that two free writers failed on the same test (the backup writer that stood in for a writer
+    that was down counts as one of them), and only when the unit deadline still holds a full repair call. A free writer that is down (it gave no
+    usable reply) counts as tried when the writer that did answer failed: the repair step must not stay closed because a provider failed
+    (owner 2026-11-16, found live: a cut-off writer_b closed the gate and the job ended before the repair step ran)."""
+    if not result.failing:
+        return "no confirmed failing test"
+    free = (_m("writer_a"), _m("writer_b"))
+    tried = [m for m in (*free, _m("reviewer_b")) if m in failing]          # reviewer_b writes only as the stand-in for a down writer_b
+    if len(tried) >= 2:
+        if not any(failing[a] & failing[b] for i, a in enumerate(tried) for b in tried[i + 1:]):
+            return "Dots and Xing did not fail on the same test"
+    elif not (len(tried) == 1 and set(free) - set(tried) <= set(down)):
+        return "Dots and Xing were not both tried"
+    if seconds_left < REPAIR_TIMEOUT_S:
+        return f"the deadline does not fit a repair call ({seconds_left:.0f} s left, {REPAIR_TIMEOUT_S} s needed)"
+    return None
+
+
+def _why(errors, reviewer):
+    """The reason a reviewer's slot failed: its upstream error, or that its reply had no verdict line."""
+    return f"reviewer {reviewer} error: {errors[reviewer]}" if errors.get(reviewer) else f"reviewer {reviewer} gave no verdict line"
+
+
+def _review_one(models, reviewer, files, slot=None):
+    """(kind, text). READY. FIX: a FIX FIRST with valid evidence. UNSUPPORTED: a FIX FIRST without valid evidence, even after one re-ask; it
+    stays open, and neither a backup nor a later READY overrides it. INVALID: the call failed or the reply has no verdict line, so the backup
+    takes the slot (no re-ask). `models.package` is the package the review was given (the runner sets it on each review call)."""
+    text, verdict = None, None
+    for turn in (1, 2):         # 2026-11-16: a reply with no verdict line is asked for once more (series 1, bench F run 3 lost its second reviewer to one)
+        try:
+            text = models.call(reviewer, "review", files, slot=slot)
+        except ModelFailed as exc:
+            if turn == 1 and "Verdict" in str(exc):
+                continue
+            raise
+        verdict = verdict_of(text)
+        if verdict is not None or turn == 2:
+            break
+    if verdict == "READY":
+        return "READY", text
+    if verdict is None:
+        return "INVALID", text
+    if evidence_ok(text, models.package):
+        return "FIX", text
+    try:
+        again = models.call(reviewer, "review-reask", files, slot=slot)
+    except ModelFailed:
+        return "UNSUPPORTED", text
+    if verdict_of(again) == "FIX FIRST" and evidence_ok(again, models.package):
+        return "FIX", again
+    return "UNSUPPORTED", again if again.strip() else text
+
+
+def _verdict(models, reviewer, files, slot=None):
+    """(kind, text, error) for one reviewer call. A failed call is INVALID with its upstream error; BudgetStop and Blocked propagate."""
+    try:
+        kind, text = _review_one(models, reviewer, files, slot)
+    except ModelFailed as exc:
+        return "INVALID", "", str(exc)
+    return kind, text, ""
+
+
+def _reject(models, model, mode, reason):
+    """A writer reply the job cannot use: recorded as a failed call (models.reject), then refused with BadReply."""
+    models.reject(model, mode, reason)
+    raise BadReply(reason)
+
+
+def _fix(reviewer, text, models):
+    """A valid FIX FIRST: the reason keeps the reviewer's whole text (for the record); `findings` is the stripped repair note the writer gets."""
+    return Outcome("review-fix", f"{reviewer}: {text.strip()}", (), tuple(strip_findings(text, models.package)))
+
+
+ARBITER_RULING = re.compile(r"^\s*[-*]?\s*finding\s+(\d+)\s*:\s*(UPHELD|REJECTED)\s*:\s*(\S.*?)\s*$")
+ARBITER_LINE = re.compile(r"^\s*[-*]?\s*finding\b", re.IGNORECASE)
+
+
+def _families():
+    """The family rows of config/model_families.json, read at each call."""
+    return json.loads((oc.REPO / "config" / "model_families.json").read_text(encoding="utf-8"))["families"]
+
+
+def family_of(model):
+    """The family of a model: the family whose prefix the model's ID starts with (config/model_families.json), else the model's own ID."""
+    for row in _families():
+        if any(model.startswith(prefix) for prefix in row["prefixes"]):
+            return row["family"]
+    return model
+
+
+def arbiter_candidates():
+    """(role, model) for each arbiter role the active roster (or the job's snapshot) names, in order: arbiter_a, then arbiter_b. Only OpenRouter
+    roles are candidates. A roster without them gives []: the review then works as it always did (the first FIX FIRST goes to repair)."""
+    specs = _roles_view() or oc.roster_state()["ROLE_SPECS"]
+    out = []
+    for role in oc.ARBITER_ROLES:
+        spec = specs.get(role)
+        if spec is None or oc.via_of(spec) != "openrouter" or spec["model"] in oc.SENTINELS:
+            continue
+        out.append((role, spec["model"]))
+    return out
+
+
+def _pick_arbiter(candidates, panel, contributors, down):
+    """The first candidate whose family differs from the family of both panel reviewers and of every model that contributed to the code, and that
+    is not down. (role, model) or None."""
+    testing = _os.environ.get("SAP_ALLOW_DUPLICATE_MODELS") == "1"      # 2026-11-18: single-family test roster: the arbiter must only be another MODEL than the panel
+    key = (lambda m: m) if testing else family_of
+    barred = set() if testing else {key(model) for model in list(panel) + sorted(contributors)}      # single-model test roster: the arbiter may be the same model
+    for role, model in candidates:
+        if model not in down and key(model) not in barred:
+            return role, model
+    return None
+
+
+def arbiter_rulings(text, count):
+    """[(n, UPHELD|REJECTED, reason)] for findings 1..count from an arbiter reply, or None when the reply cannot be used: a ruling missing, repeated or
+    out of range, a finding line that does not parse, or a final verdict line that does not match the rulings (READY when all are rejected,
+    else FIX FIRST)."""
+    found = {}
+    for raw in text.splitlines():
+        match = ARBITER_RULING.match(raw)
+        if match is None:
+            if ARBITER_LINE.match(raw):
+                return None
+            continue
+        n = int(match.group(1))
+        if n in found or not 1 <= n <= count:
+            return None
+        found[n] = (match.group(2), match.group(3))
+    if set(found) != set(range(1, count + 1)):
+        return None
+    upheld = any(verdict == "UPHELD" for verdict, _ in found.values())
+    if verdict_of(text) != ("FIX FIRST" if upheld else "READY"):
+        return None
+    return [(n, found[n][0], found[n][1]) for n in range(1, count + 1)]
+
+
+def _merged(fixes, models, lead=""):
+    """Both reviewers' FIX FIRST findings in one review-fix outcome: the repair notes of each, identical lines once. Both claims stand."""
+    notes = []
+    for _who, text in fixes:
+        for note in strip_findings(text, models.package):
+            if note not in notes:
+                notes.append(note)
+    reason = lead + "\n".join(f"{who}: {text.strip()}" for who, text in fixes)
+    return Outcome("review-fix", reason, (), tuple(notes))
+
+
+def _arbitrate(fix, ready, files, models, panel, contributors, down):
+    """A disagreement: one reviewer said FIX FIRST and the other READY. The arbiter (the first eligible candidate) rules on each finding. Every
+    decision goes to the models object (arbitrated) as one record, for ARBITER.md and the event. Any arbiter failure keeps the findings."""
+    fix_who, fix_text = fix
+    ready_who, ready_text = ready
+    notes = strip_findings(fix_text, models.package)
+    record = {"findings": notes, "fix": {"reviewer": fix_who, "text": fix_text}, "ready": {"reviewer": ready_who, "text": ready_text},
+              "arbiter": None, "reply": "", "rulings": [], "outcome": None, "reason": None}
+
+    def finish(status, reason, kept=()):
+        record.update(outcome=status, reason=reason)
+        if hasattr(models, "arbitrated"):
+            models.arbitrated(record)
+        return Outcome(status, reason, (), tuple(kept))
+
+    stands = f"the findings of {fix_who} stand: {fix_text.strip()}"
+    pick = _pick_arbiter(arbiter_candidates(), panel, contributors, down)
+    if pick is None:
+        return finish("review-fix", f"arbiter unavailable: no independent arbiter (a model of another family than the panel and the code's contributors); {stands}", notes)
+    role, arbiter = pick
+    record["arbiter"] = {"model": arbiter, "role": role}
+    claims = {"findings": notes, "fix_reviewer": fix_who, "ready_reviewer": ready_who, "ready_text": ready_text}
+    try:
+        reply = models.call(arbiter, "arbiter", files, slot=role, claims=claims)
+    except ModelFailed as exc:
+        return finish("review-fix", f"arbiter unavailable ({exc}); {stands}", notes)
+    record["reply"] = reply
+    rulings = arbiter_rulings(reply, len(notes))
+    if rulings is None:
+        models.reject(arbiter, "arbiter", "arbiter reply unusable: no ruling per finding, or the verdict line does not match the rulings")
+        return finish("review-fix", f"arbiter reply unusable; {stands}", notes)
+    record["rulings"] = [{"n": n, "verdict": verdict, "reason": reason} for n, verdict, reason in rulings]
+    shown = "; ".join(f"finding {n} {verdict}: {reason}" for n, verdict, reason in rulings)
+    upheld = [n for n, verdict, _ in rulings if verdict == "UPHELD"]
+    if upheld:
+        return finish("review-fix", f"arbiter {arbiter} upheld {len(upheld)} of {len(notes)} findings of {fix_who} ({shown})",
+                      [notes[n - 1] for n in upheld])
+    return finish("passed", f"READY from: {ready_who}; the arbiter {arbiter} overruled all {len(notes)} findings of {fix_who} ({shown})")
+
+
+def _review(files, models, lineage, down):
+    """The review of a candidate. Without arbiter roles the first FIX FIRST goes straight to repair, as it always did. With them, both panel
+    reviewers always give a verdict (a failed one is replaced by a backup, as before). Both READY: passed. Both FIX FIRST: their findings merged.
+    One READY and one FIX FIRST: the arbiter rules on the findings (_arbitrate)."""
+    try:
+        origin = _origin(lineage, files)
+        contributors = lineage.contributors(files)
+        panel = panel_for(origin, unavailable=down, contributors=contributors)
+    except Blocked as exc:
+        return Outcome("blocked", str(exc))
+    except oc.ProviderUnavailable as exc:
+        return Outcome("provider-unavailable", str(exc))
+    arbitrating = bool(arbiter_candidates())
+    used = set(panel) | set(down)
+    ready, errors, fixes = [], {}, []           # ready: (name, text) of each READY; fixes: (name, text) of each FIX FIRST (arbitrating only)
+
+    def ends(status, reason):
+        """A review that cannot finish: a FIX FIRST already given still stands, with its findings."""
+        return _merged(fixes, models, f"{reason}\n") if fixes else Outcome(status, reason)
+
+    try:
+        for index, slot in enumerate(panel):            # reviewer_b (or its backup) first, then reviewer_a; panel_for keeps this order
+            seat = oc.REVIEWER_ROLES[index]             # the panel slot: reviewer_b, then reviewer_a
+            kind, text, error = _verdict(models, slot, files, seat)
+            if kind == "READY":
+                ready.append((slot, text))
+                continue
+            if kind == "FIX":
+                if not arbitrating:
+                    return _fix(slot, text, models)
+                fixes.append((slot, text))
+                continue
+            if kind == "UNSUPPORTED":
+                return ends("review-fix", f"{slot}: FIX FIRST without valid evidence (file:line and SPEC n or CHECK n): {text.strip()}")
+            errors[slot] = error
+            if slot in _paid_reviewers():               # the paid reviewer must answer READY: there is no substitute for it
+                return ends("provider-unavailable", f"paid review did not return READY ({_why(errors, slot)})")
+            try:
+                backup = backup_writer(origin, used, contributors=contributors)
+            except oc.ProviderUnavailable as exc:
+                return ends("provider-unavailable", f"{exc} ({_why(errors, slot)})")
+            used.add(backup)
+            kind, text, error = _verdict(models, backup, files, seat)     # a backup takes the slot it stands in for
+            if kind == "READY":
+                ready.append((f"{backup} (backup for {slot})", text))
+                continue
+            if kind == "FIX":
+                if not arbitrating:
+                    return _fix(backup, text, models)
+                fixes.append((backup, text))
+                continue
+            if kind == "UNSUPPORTED":
+                return ends("review-fix", f"{backup}: FIX FIRST without valid evidence (file:line and SPEC n or CHECK n): {text.strip()}")
+            errors[backup] = error
+            return ends("provider-unavailable", f"backup reviewer {backup} did not return READY ({_why(errors, slot)}; {_why(errors, backup)})")
+    except Blocked as exc:                              # the package is too large: no reviewer call was made for it
+        return Outcome("blocked", str(exc))
+    if not fixes:
+        return Outcome("passed", "READY from: " + ", ".join(name for name, _ in ready))
+    if len(fixes) == 2:
+        return _merged(fixes, models, "both reviewers gave FIX FIRST; both claims stand:\n")
+    return _arbitrate(fixes[0], ready[0], files, models, panel, contributors, down)
+
+
+def walk(job, models, lineage, clock=time.monotonic):
+    """The production ladder for one unit. Returns Outcome(status, reason, failing). Statuses: passed, review-fix, escalate, blocked,
+    provider-unavailable, budget-exceeded, quota-exhausted, needs_review, deadline. A models object with `ladder_roles` (the production
+    runner with a stage snapshot) gives the role models for this walk; without it they are the roster's."""
+    token = _JOB_ROLES.set(getattr(models, "ladder_roles", None))
+    try:
+        return _ladder(job, models, lineage, clock)
+    except BudgetStop as exc:
+        return Outcome("budget-exceeded", str(exc))
+    except QuotaStop as exc:
+        return Outcome("quota-exhausted", str(exc))
+    finally:
+        _JOB_ROLES.reset(token)
+
+
+def _ladder(job, models, lineage, clock):
+    started = clock()
+    files = list(job["files"])
+    wanted = frozenset(files)
+    limit = job["deadline_min"] * 60
+    failing, down = {}, set()
+    history, written = [], {}           # the free writers' test runs, in order; each writer's last reply (for the contract check)
+    flags = {"streak": None}            # the failing ids of a streak of STREAK identical writer runs, once one has happened
+
+    def remaining():
+        return limit - (clock() - started)
+
+    def late():
+        return remaining() < 0
+
+    def take(reply, model, mode, full, keep_origin):
+        if not isinstance(reply, dict) or not reply:
+            raise BadReply(f"{model} reply has no FILE blocks")
+        extra = set(reply) - wanted
+        if extra:
+            _reject(models, model, mode, f"{model} reply names files outside the job: {sorted(extra)}")
+        if full and set(reply) != wanted:
+            _reject(models, model, mode, f"{model} fresh reply is missing job files: {sorted(wanted - set(reply))}")
+        served_now = _served_of(models, model)
+        for path in reply:
+            previous = lineage.get(path)
+            keep = bool(keep_origin and previous)
+            origin = previous["origin"] if keep else model
+            chain = (list(previous["chain"]) if keep else []) + [model]
+            served = (lineage.served(path) if keep else []) + served_now
+            lineage.set(path, model, origin, chain, served=served)
+
+    best = {}       # 2026-11-16: the red candidate with the FEWEST failing tests so far (files on disk, lineage rows); the repair step repairs this one, never a worse one
+
+    def note_best(result, model):
+        snap = getattr(models, "snapshot", None)
+        if snap is None or result.green or result.systemic or not result.failing:
+            return
+        if not best or len(result.failing) < best["n"]:
+            best.update(n=len(result.failing), files=snap(), result=result, model=model,
+                        rows={path: dict(lineage.get(path)) for path in files if lineage.get(path) is not None},
+                        served={path: lineage.served(path) for path in files if lineage.get(path) is not None})
+
+    def back_to_best(result, force=False):
+        """The repair step must start from the best red candidate: put it back when the current one has more failing tests (or, forced, when the
+        files on disk are not a candidate at all, e.g. after the originals were restored for a fresh write that never came)."""
+        if not best or (not force and (len(result.failing) <= best["n"] or result.systemic)):
+            return result
+        models.reinstate(best["files"])
+        for path, row in best["rows"].items():
+            lineage.set(path, row["last"], row["origin"], row["chain"], served=best["served"][path])
+        return models.tests(files)
+
+    def attempt(model, mode, full=False, keep_origin=False):
+        reply = models.call(model, mode, files)
+        take(reply, model, mode, full, keep_origin)
+        if model in (_m("writer_a"), _m("writer_b")):
+            written[model] = dict(reply)
+        models.write(reply)                      # validated files go to disk before the tests run
+        result = models.tests(files)
+        failing[model] = result.failing
+        note_best(result, model)
+        if model in (_m("writer_a"), _m("writer_b")):           # only the free writers' runs count for the streak
+            history.append(result.failing)
+            if not result.green and result.failing and len(history) >= STREAK and all(h == result.failing for h in history[-STREAK:]):
+                flags["streak"] = tuple(sorted(result.failing))
+            if not result.green and model == _m("writer_b") and _m("writer_a") in failing:
+                shared = sorted(t for t in failing[_m("writer_a")] & failing[_m("writer_b")] if t.split("::")[0] in set(job.get("acceptance_tests") or []))
+                if shared and written[_m("writer_a")] != written[_m("writer_b")]:
+                    models.contract_check(shared, written[_m("writer_a")], written[_m("writer_b")])     # the file only: the ladder goes on
+        return result
+
+    def stuck(reason):
+        """No repair step is left (or none can run): needs_review when a streak of identical writer runs happened, else the reason given."""
+        if flags["streak"]:
+            ids = flags["streak"]
+            return Outcome("needs_review", f"the same failing tests in {STREAK} test runs in a row: " + ", ".join(ids), ids)
+        return Outcome("escalate", reason)
+
+    deadline = Outcome("deadline", "the unit deadline passed; stopped between rounds")
+    if late():
+        return deadline
+
+    try:
+        result = attempt(_m("writer_a"), "write")
+    except ModelFailed:
+        down.add(_m("writer_a"))
+        result = None
+    except BadReply:
+        result = None
+
+    if result is not None and not result.green and not result.systemic:       # any non-systemic red gets one writer_a repair (systemic: timeouts, no JUnit)
+        if late():
+            return deadline
+        try:
+            result = attempt(_m("writer_a"), "repair")
+        except ModelFailed:
+            down.add(_m("writer_a"))
+            result = None
+        except BadReply:
+            result = None
+
+    fresh_writer = None
+    if result is None or not result.green:
+        if late():
+            return deadline
+        models.restore()
+        # 2026-11-16: the reviewer model is never a writer (in series 1 and 2 its fallback writes were worse than the first writer's and once used a tool).
+        # When the second writer fails, the repair step goes on from the best red candidate so far.
+        try:
+            result = attempt(_m("writer_b"), "write", full=True)
+            fresh_writer = _m("writer_b")
+        except (ModelFailed, BadReply) as exc:
+            if isinstance(exc, ModelFailed):
+                down.add(_m("writer_b"))
+            if not best:
+                if isinstance(exc, BadReply):
+                    return Outcome("escalate", str(exc))
+                return Outcome("provider-unavailable", "the second writer failed the fresh write and no red candidate exists to repair")
+            result = back_to_best(result if result is not None else best["result"], force=True)
+
+    if not result.green and fresh_writer == _m("writer_b"):
+        if late():
+            return deadline
+        try:
+            result = attempt(_m("writer_b"), "repair")
+        except (ModelFailed, BadReply):      # owner 2026-11-16: a cut-off or bad free repair no longer ends the job; the next rung (the Claude repair below) runs on the same red files
+            pass
+
+    repairs = 0
+    while not result.green:
+        if late():
+            return deadline
+        if repairs == REPAIR_CALLS:
+            return stuck(f"repair calls used up ({REPAIR_CALLS}) and still red")
+        why = _gate(result, failing, remaining(), down)
+        if why:
+            return stuck(f"repair gate: {why}")
+        repairs += 1
+        result = back_to_best(result)
+        if result.green:
+            break
+        try:
+            result = attempt(ANTHROPIC, "repair", keep_origin=True)
+        except ModelFailed as exc:
+            return Outcome("escalate", exc.reason or "repair unavailable")
+        except BadReply as exc:
+            return Outcome("escalate", str(exc))
+
+    rounds = 0
+    try:
+        outcome = _review(files, models, lineage, down)
+        while outcome.status == "review-fix" and outcome.findings:
+            if rounds == FIX_ROUNDS:
+                return Outcome("review-fix", f"{FIX_ROUNDS} FIX FIRST repair rounds used up; {outcome.reason}", (), outcome.findings)
+            if remaining() < REPAIR_TIMEOUT_S:
+                return Outcome("review-fix", f"the deadline does not fit a repair call ({remaining():.0f} s left); {outcome.reason}", (), outcome.findings)
+            mine = [note for note in outcome.findings if lineage.get(_path_of(note)) is not None]     # findings on job files only
+            if not mine:
+                return Outcome("review-fix", f"no finding names a job file; {outcome.reason}", (), outcome.findings)
+            rounds += 1
+            writer = lineage.get(_path_of(mine[0]))["last"]          # the current writer: the one that last wrote the finding's file
+            models.stage_fix(mine)
+            green_rows = {path: dict(lineage.get(path)) for path in files if lineage.get(path) is not None}
+            green_served = {path: lineage.served(path) for path in green_rows}
+            try:
+                result = attempt(writer, "repair", keep_origin=True)
+            except ModelFailed as exc:
+                return Outcome("review-fix", f"repair by {writer} unavailable ({exc}); {outcome.reason}", (), outcome.findings)
+            except BadReply as exc:
+                return Outcome("review-fix", f"repair by {writer} gave a bad reply ({exc}); {outcome.reason}", (), outcome.findings)
+            if not result.green:                 # the code that passed every test is never thrown away: put it back, the findings stay open
+                models.restore_green()
+                for path, row in green_rows.items():
+                    lineage.set(path, row["last"], row["origin"], row["chain"], served=green_served[path])
+                return Outcome("review-fix", f"FIX FIRST repair round {rounds} by {writer} left the tests red ("
+                               + ", ".join(sorted(result.failing)) + f"); the last green code is kept; {outcome.reason}", (), outcome.findings)
+            outcome = _review(files, models, lineage, down)          # tests are green: the panel is recomputed from lineage and reviews again
+        return outcome
+    except BudgetStop as exc:
+        return Outcome("budget-exceeded", str(exc))

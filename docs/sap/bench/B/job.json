@@ -1,0 +1,122 @@
+{
+  "name": "bench-B",
+  "profile": "production",
+  "visibility": "public",
+  "spec": "docs/sap/bench/B/SPEC.md",
+  "files": [
+    "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap"
+  ],
+  "tests": [
+    "tests/acceptance/sap_B_acceptance.py"
+  ],
+  "acceptance_tests": [
+    "tests/acceptance/sap_B_acceptance.py"
+  ],
+  "reference": [],
+  "writer_reference": false,
+  "negative_controls": [
+    {
+      "name": "always_zero",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_always_zero.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_half_is_50",
+        "tests/acceptance/sap_B_acceptance.py::test_one_of_three_is_33",
+        "tests/acceptance/sap_B_acceptance.py::test_full_is_99",
+        "tests/acceptance/sap_B_acceptance.py::test_zero_current_is_1"
+      ]
+    },
+    {
+      "name": "special_case_values",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_special_case_values.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_large_is_zero"
+      ]
+    },
+    {
+      "name": "rule_removed",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_rule_removed.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_full_is_99",
+        "tests/acceptance/sap_B_acceptance.py::test_zero_current_is_1"
+      ]
+    },
+    {
+      "name": "catch_gives_one",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_catch_gives_one.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_one_is_zero",
+        "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_large_is_zero"
+      ]
+    },
+    {
+      "name": "wrong_exception",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_wrong_exception.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_one_is_zero",
+        "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_large_is_zero"
+      ]
+    },
+    {
+      "name": "collateral",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_collateral.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_nothing_outside_calc_pct_changed"
+      ]
+    },
+    {
+      "name": "syntax_broken",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_syntax_broken.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    },
+    {
+      "name": "kernel_poc",
+      "replace": {
+        "abap_work/abapgit_B/zcl_abapgit_progress.clas.abap": "tests/controls/sap_B_kernel_poc.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_one_is_zero",
+        "tests/acceptance/sap_B_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    }
+  ],
+  "acceptance_baseline_fail": [
+    "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_one_is_zero",
+    "tests/acceptance/sap_B_acceptance.py::test_zero_total_current_large_is_zero",
+    "tests/acceptance/sap_B_acceptance.py::test_new_total_after_zero"
+  ],
+  "fixers": [
+    "writer_a",
+    "writer_b"
+  ],
+  "reviewers": "by_lineage",
+  "budget": {
+    "free_requests": 40,
+    "review_usd": 0.05,
+    "paid_usd": 0
+  },
+  "deadline_min": 60,
+  "sandbox_include": [
+    "scripts",
+    "tests",
+    "abap_work",
+    "config",
+    "docs"
+  ],
+  "writer_edit": true
+}

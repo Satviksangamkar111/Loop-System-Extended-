@@ -1,0 +1,135 @@
+{
+  "name": "bench-C",
+  "profile": "production",
+  "visibility": "public",
+  "spec": "docs/sap/bench/C/SPEC.md",
+  "files": [
+    "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap"
+  ],
+  "tests": [
+    "tests/acceptance/sap_C_acceptance.py"
+  ],
+  "acceptance_tests": [
+    "tests/acceptance/sap_C_acceptance.py"
+  ],
+  "reference": [],
+  "writer_reference": false,
+  "negative_controls": [
+    {
+      "name": "identity",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_identity.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_old_behaviour_unchanged",
+        "tests/acceptance/sap_C_acceptance.py::test_shifted_rows_have_no_sign_blank",
+        "tests/acceptance/sap_C_acceptance.py::test_blanks_are_preserved",
+        "tests/acceptance/sap_C_acceptance.py::test_sheet_names_are_not_cell_references"
+      ]
+    },
+    {
+      "name": "constant",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_constant.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_old_behaviour_unchanged",
+        "tests/acceptance/sap_C_acceptance.py::test_shifted_rows_have_no_sign_blank",
+        "tests/acceptance/sap_C_acceptance.py::test_blanks_are_preserved",
+        "tests/acceptance/sap_C_acceptance.py::test_sheet_names_are_not_cell_references",
+        "tests/acceptance/sap_C_acceptance.py::test_range_name_f_1_is_not_shifted",
+        "tests/acceptance/sap_C_acceptance.py::test_rc_inside_a_string_is_not_shifted",
+        "tests/acceptance/sap_C_acceptance.py::test_quoted_sheet_a1_is_not_shifted",
+        "tests/acceptance/sap_C_acceptance.py::test_subtotal_table_reference_unchanged"
+      ]
+    },
+    {
+      "name": "partial_blanks_only",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_partial_blanks_only.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_sheet_names_are_not_cell_references",
+        "tests/acceptance/sap_C_acceptance.py::test_range_name_f_1_is_not_shifted",
+        "tests/acceptance/sap_C_acceptance.py::test_quoted_sheet_a1_is_not_shifted",
+        "tests/acceptance/sap_C_acceptance.py::test_subtotal_table_reference_unchanged"
+      ]
+    },
+    {
+      "name": "partial_sheets_only",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_partial_sheets_only.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_blanks_are_preserved",
+        "tests/acceptance/sap_C_acceptance.py::test_sheet_names_are_not_cell_references",
+        "tests/acceptance/sap_C_acceptance.py::test_subtotal_table_reference_unchanged"
+      ]
+    },
+    {
+      "name": "no_condense",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_no_condense.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_shifted_rows_have_no_sign_blank",
+        "tests/acceptance/sap_C_acceptance.py::test_blanks_are_preserved",
+        "tests/acceptance/sap_C_acceptance.py::test_sheet_names_are_not_cell_references"
+      ]
+    },
+    {
+      "name": "collateral",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_collateral.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_nothing_outside_shift_formula_changed"
+      ]
+    },
+    {
+      "name": "syntax_broken",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_syntax_broken.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    },
+    {
+      "name": "kernel_poc",
+      "replace": {
+        "abap_work/abap2xlsx_C/zcl_excel_common.clas.abap": "tests/controls/sap_C_kernel_poc.abap"
+      },
+      "must_fail": [
+        "tests/acceptance/sap_C_acceptance.py::test_old_behaviour_unchanged",
+        "tests/acceptance/sap_C_acceptance.py::test_no_abaplint_issues_in_the_edited_file"
+      ]
+    }
+  ],
+  "acceptance_baseline_fail": [
+    "tests/acceptance/sap_C_acceptance.py::test_blanks_are_preserved",
+    "tests/acceptance/sap_C_acceptance.py::test_sheet_names_are_not_cell_references",
+    "tests/acceptance/sap_C_acceptance.py::test_range_name_f_1_is_not_shifted",
+    "tests/acceptance/sap_C_acceptance.py::test_quoted_sheet_a1_is_not_shifted",
+    "tests/acceptance/sap_C_acceptance.py::test_subtotal_table_reference_unchanged"
+  ],
+  "fixers": [
+    "writer_a",
+    "writer_b"
+  ],
+  "reviewers": "by_lineage",
+  "budget": {
+    "free_requests": 40,
+    "review_usd": 0.05,
+    "paid_usd": 0
+  },
+  "deadline_min": 120,
+  "sandbox_include": [
+    "scripts",
+    "tests",
+    "abap_work",
+    "config",
+    "docs"
+  ],
+  "writer_edit": true
+}

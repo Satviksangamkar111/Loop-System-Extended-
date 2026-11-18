@@ -1,0 +1,3 @@
+When only one side of a file ends in a newline, `zcl_abapgit_diff_std` marks the last line of the other side with a form feed. The patch is built from the diff texts, so an unpicked change of that last line put the form feed into the commit: staging only an added line "c" in a file that is "a\nb" in Git and "a\nb\nc\n" locally gave "a\nb<FF>\nc\n".
+
+`calculate_patch` now removes the marker from every line it takes over. The diff itself keeps it for the "no newline at end of file" display.

@@ -1,0 +1,21 @@
+{
+  "_about": "2026-11-16: the coding-agent CLI that runs a roster role whose via is cli_exec (scripts/source/exec_role.py). The model and effort come from config/roster.json; these are only the command and its arguments. {model}, {effort} and {out} are filled in per call; the prompt goes on stdin.",
+  "command": "codex",
+  "args": [
+    "exec",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "-c",
+    "web_search=\"disabled\"",
+    "-m",
+    "{model}",
+    "-c",
+    "model_reasoning_effort={effort}",
+    "-o",
+    "{out}",
+    "-"
+  ]
+}

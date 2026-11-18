@@ -1,0 +1,68 @@
+{
+ "schema": 1,
+ "id": "hb_erp_010",
+ "repo": "timkoehne/LLM-Benchmark-ABAP-Code-Generation",
+ "pr": 0,
+ "base_sha": "6898edf",
+ "merge_sha": "6898edf",
+ "label": "BENCHMARK",
+ "ticket_source": "benchmark_prompt",
+ "production_file": "src/z_humaneval_erp_010.clas.abap",
+ "work_file": "abap_work/hb_erp_010/z_humaneval_erp_010.clas.abap",
+ "original_sha256": "6f8d3311c3a2d27494cd64c22233f6bda2f49cafabc3f47105db9f6b72ef7d74",
+ "test_files": [
+  {
+   "path": "src/z_humaneval_erp_010.clas.testclasses.abap",
+   "stored": "tests_upstream/z_humaneval_erp_010.clas.testclasses.abap",
+   "sha256": "7c50f6ce404bfa6506e2eca23e256a884d715d8a55c344e8c99eff79a66c05d1",
+   "new_methods": [
+    "test_exact_match_customer_id",
+    "test_exact_match_name",
+    "test_partial_match_customer_id",
+    "test_partial_match_name",
+    "test_no_match",
+    "test_empty_pattern",
+    "test_mixed_case_pattern",
+    "test_no_data_in_db"
+   ],
+   "heldout_methods": [
+    "test_exact_match_name",
+    "test_partial_match_name",
+    "test_empty_pattern",
+    "test_no_data_in_db"
+   ]
+  }
+ ],
+ "allowed_methods": [
+  "find_by_pattern"
+ ],
+ "runner": {
+  "project": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_erp_010",
+  "project_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_erp_010",
+  "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\libs",
+  "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools",
+  "config": "abap_transpile.json",
+  "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps",
+  "only_object": "Z_HUMANEVAL_ERP_010"
+ },
+ "gate": {
+  "base_transpiles": true,
+  "base_fails": [
+   "test_empty_pattern",
+   "test_exact_match_customer_id",
+   "test_exact_match_name",
+   "test_mixed_case_pattern",
+   "test_partial_match_customer_id",
+   "test_partial_match_name"
+  ],
+  "heldout_fails_on_base": false,
+  "heldout_failing_methods": [
+   "test_empty_pattern",
+   "test_exact_match_name",
+   "test_partial_match_name"
+  ],
+  "fix_passes": true,
+  "checked_utc": "2026-11-18T13:01:42.882354+00:00"
+ },
+ "created_utc": "2026-11-18T13:01:42.882387+00:00"
+}

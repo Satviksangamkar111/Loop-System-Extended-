@@ -1,0 +1,19 @@
+CLASS z_humaneval_erp_000 DEFINITION
+  PUBLIC
+  FINAL
+  CREATE PUBLIC .
+
+  PUBLIC SECTION.
+    CLASS-METHODS: find_ceo_name
+      RETURNING VALUE(rv_ceo_name) TYPE string.
+  PROTECTED SECTION.
+  PRIVATE SECTION.
+ENDCLASS.
+
+CLASS z_humaneval_erp_000 IMPLEMENTATION.
+
+  METHOD find_ceo_name.
+  ENDMETHOD.
+
+
+ENDCLASS.

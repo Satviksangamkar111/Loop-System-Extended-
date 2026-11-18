@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "revision": 1,
+  "profiles": {
+    "test": {
+      "probe_max_tokens": 256,
+      "repair_max_tokens": 10000,
+      "effort_by_mode": {
+        "write": "high",
+        "repair": "low",
+        "review": "low",
+        "review-reask": "low"
+      },
+      "stages": {
+        "planner": {},
+        "writer_a_write": {},
+        "writer_a_repair": {},
+        "writer_b_write": {},
+        "writer_b_repair": {},
+        "reviewer_b": {},
+        "reviewer_a": {},
+        "reviewer_reask": {},
+        "specialist_repair": {},
+        "review_fix_repair": {}
+      },
+      "roles": {
+        "writer_a": {
+          "model": "dots-studio/dots-3-note-preview:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 40000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "writer_b": {
+          "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 40000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "reviewer_a": {
+          "model": "non_author_writer",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "reviewer_b": {
+          "model": "nvidia/nemotron-3.5-super-vl:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 16000,
+            "timeout_s": 600,
+            "sampling": null,
+            "max_tokens_cap": 72000
+          }
+        },
+        "repair": {
+          "model": "off",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "planner": {
+          "model": "fake",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        }
+      }
+    },
+    "production": {
+      "probe_max_tokens": 256,
+      "repair_max_tokens": 32000,
+      "effort_by_mode": {
+        "write": "off",
+        "repair": "off",
+        "review": "medium",
+        "review-reask": "medium"
+      },
+      "stages": {
+        "planner": {},
+        "writer_a_write": {},
+        "writer_a_repair": {},
+        "writer_b_write": {},
+        "writer_b_repair": {},
+        "reviewer_b": {},
+        "reviewer_a": {},
+        "reviewer_reask": {},
+        "specialist_repair": {},
+        "review_fix_repair": {}
+      },
+      "roles": {
+        "writer_a": {
+          "model": "deepseek/deepseek-v4-flash",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": null,
+            "max_tokens": 64000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "writer_b": {
+          "model": "mistralai/mistral-large-2512",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": null,
+            "max_tokens": 64000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "retry_max_tokens": 72000,
+            "retry_timeout_s": 1800,
+            "max_tokens_cap": 72000
+          }
+        },
+        "reviewer_a": {
+          "via": "claude_code",
+          "model": "haiku",
+          "effort": "medium",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "reviewer_b": {
+          "model": "google/gemini-2.5-pro",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": null,
+            "max_tokens": 24000,
+            "timeout_s": 900,
+            "sampling": null,
+            "retry_max_tokens": 32000,
+            "retry_timeout_s": 1200,
+            "max_tokens_cap": 32000
+          }
+        },
+        "repair": {
+          "via": "claude_code",
+          "model": "haiku",
+          "effort": "low",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": null,
+            "reasoning": null,
+            "max_tokens": null,
+            "timeout_s": null,
+            "sampling": null,
+            "max_tokens_cap": null
+          }
+        },
+        "planner": {
+          "model": "moonshotai/kimi-k3.1-pro",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.2,
+            "reasoning": {
+              "effort": "low"
+            },
+            "max_tokens": 24000,
+            "timeout_s": 900,
+            "sampling": null,
+            "max_tokens_cap": 32000
+          }
+        },
+        "arbiter_a": {
+          "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": {
+              "max_tokens": 8000
+            },
+            "max_tokens": 32000,
+            "timeout_s": 1200,
+            "sampling": null,
+            "max_tokens_cap": 72000
+          }
+        },
+        "arbiter_b": {
+          "model": "qwen/qwen3.7-plus",
+          "provider": null,
+          "paid": false,
+          "pricing": null,
+          "settings": {
+            "temperature": 0.1,
+            "reasoning": null,
+            "max_tokens": 8000,
+            "timeout_s": 600,
+            "sampling": null,
+            "max_tokens_cap": 16000,
+            "retry_max_tokens": 16000,
+            "retry_timeout_s": 900
+          }
+        }
+      }
+    }
+  },
+  "note": "SAP roster: free OpenRouter writers, reviewer_b Dots, reviewer_a Claude Code Haiku medium (owner choice 2026-11-11), repair Claude Code Haiku medium. No paid OpenRouter role. Haiku is both reviewer_a and repair: the loop bars a model from reviewing code it repaired, so after a repair the second reviewer is the non-author free writer."
+}

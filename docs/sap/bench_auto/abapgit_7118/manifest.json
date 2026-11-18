@@ -1,0 +1,60 @@
+{
+  "allowed_methods": [
+    "icon",
+    "indent_line",
+    "set_debug_mode",
+    "study_line",
+    "zif_abapgit_html~wrap"
+  ],
+  "base_sha": "b7bb00d7ee92ad648e033adc31c0c36e2aa45c6e",
+  "created_utc": "2026-11-17T05:15:26+00:00",
+  "gate": {
+    "base_fails": [
+      "ltcl_html->indent7"
+    ],
+    "base_transpiles": true,
+    "checked_utc": "2026-11-17T05:15:26+00:00",
+    "fix_passes": true,
+    "heldout_fails_on_base": false,
+    "tool_versions": {
+      "@abaplint/cli": "2.120.100",
+      "@abaplint/runtime": "2.14.28",
+      "@abaplint/transpiler-cli": "2.14.28"
+    }
+  },
+  "id": "abapgit_7118",
+  "label": "SEMI-GUIDED",
+  "merge_sha": "1fac2a71e28efe33cfb068c9681677b2f9cdefd9",
+  "original_sha256": "ca315c28761a0f5d8991277e22f78ceaa0a69797122decd4db202fb265fdf495",
+  "pr": 7118,
+  "production_file": "src/ui/core/zcl_abapgit_html.clas.abap",
+  "repo": "abapGit/abapGit",
+  "runner": {
+    "base_sha": "b7bb00d7ee92ad648e033adc31c0c36e2aa45c6e",
+    "config": "test/abap_transpile.auto.json",
+    "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\libs",
+    "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps",
+    "only_object": "ZCL_ABAPGIT_HTML",
+    "project": "C:\\__NO_ABAP_RUNTIME__\\projects\\abapgit_b7bb00d7ee",
+    "project_dir": "C:\\__NO_ABAP_RUNTIME__\\projects\\abapgit_b7bb00d7ee",
+    "repo": "abapGit/abapGit",
+    "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools"
+  },
+  "schema": 1,
+  "test_files": [
+    {
+      "heldout_methods": [
+        "indent6"
+      ],
+      "new_methods": [
+        "indent6",
+        "indent7"
+      ],
+      "path": "src/ui/core/zcl_abapgit_html.clas.testclasses.abap",
+      "sha256": "96fe82f3d08d13efdae8369a5f2b2ec1bf5e070e667cacee58125125ff387106",
+      "stored": "tests_upstream/zcl_abapgit_html.clas.testclasses.abap"
+    }
+  ],
+  "ticket_source": "pr_body",
+  "work_file": "abap_work/abapgit_7118/zcl_abapgit_html.clas.abap"
+}

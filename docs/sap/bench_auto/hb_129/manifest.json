@@ -1,0 +1,79 @@
+{
+ "schema": 1,
+ "id": "hb_129",
+ "repo": "timkoehne/LLM-Benchmark-ABAP-Code-Generation",
+ "pr": 0,
+ "base_sha": "6898edf",
+ "merge_sha": "6898edf",
+ "label": "BENCHMARK",
+ "ticket_source": "benchmark_prompt",
+ "production_file": "src/z_humaneval_129.clas.abap",
+ "work_file": "abap_work/hb_129/z_humaneval_129.clas.abap",
+ "original_sha256": "0eff509980aacb12eac3a7b77e24a6a63f46c5e2a9797654dd0192d44c9928ef",
+ "test_files": [
+  {
+   "path": "src/z_humaneval_129.clas.testclasses.abap",
+   "stored": "tests_upstream/z_humaneval_129.clas.testclasses.abap",
+   "sha256": "107180d8c623a519afa3954b2e5c671a928c16c9adda929989cdcbe6c92e777a",
+   "new_methods": [
+    "test_case_1",
+    "test_case_2",
+    "test_case_3",
+    "test_case_4",
+    "test_case_5",
+    "test_case_6",
+    "test_case_7",
+    "test_case_8",
+    "test_case_9",
+    "test_case_10",
+    "test_case_11"
+   ],
+   "heldout_methods": [
+    "test_case_2",
+    "test_case_4",
+    "test_case_6",
+    "test_case_8",
+    "test_case_10"
+   ]
+  }
+ ],
+ "allowed_methods": [
+  "minpath"
+ ],
+ "runner": {
+  "project": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_129",
+  "project_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_129",
+  "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\libs",
+  "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools",
+  "config": "abap_transpile.json",
+  "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps",
+  "only_object": "Z_HUMANEVAL_129"
+ },
+ "gate": {
+  "base_transpiles": true,
+  "base_fails": [
+   "test_case_1",
+   "test_case_10",
+   "test_case_11",
+   "test_case_2",
+   "test_case_3",
+   "test_case_4",
+   "test_case_5",
+   "test_case_6",
+   "test_case_7",
+   "test_case_8",
+   "test_case_9"
+  ],
+  "heldout_fails_on_base": true,
+  "heldout_failing_methods": [
+   "test_case_10",
+   "test_case_2",
+   "test_case_4",
+   "test_case_6",
+   "test_case_8"
+  ],
+  "fix_passes": true,
+  "checked_utc": "2026-11-18T13:00:54.533613+00:00"
+ },
+ "created_utc": "2026-11-18T13:00:54.533657+00:00"
+}

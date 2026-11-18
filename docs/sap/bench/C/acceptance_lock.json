@@ -1,0 +1,19 @@
+{
+  "docs/sap/bench/C/SPEC.md": "448004c54042360f40456d53ce8885234e073a9a99dba034d8999d4f43a6c08f",
+  "docs/sap/bench/C/abap_transpile.pinned2.json": "32b4f71cae2581c98dfb89276b2902969f5891f7b69990423457c472975f94e9",
+  "docs/sap/bench/C/hidden_tests.clas.testclasses.abap": "412dd15e8d4236339c553a05a08521794a3f6966daafa50f8233225416447d45",
+  "docs/sap/bench/C/runner.json": "427ebd28725196bda5eb14e866963d9f3603717af557221a963f1f77c6e8d2c3",
+  "tests/acceptance/sap_C_acceptance.py": "669f7c8eca2c6674c0d4c53a8b75b097190506f91b9ac4926ccbb6a825084440",
+  "tests/controls/sap_C_alt_valid.abap": "efa27f52b2b353e986137b8e08863df7fa2e9d9ad46514bdc6d5c5ccd73a7058",
+  "tests/controls/sap_C_collateral.abap": "03d847e65a92bb18a19cdfcdbc3768622300c7595993445fdb00dde4c0edbeae",
+  "tests/controls/sap_C_constant.abap": "084ad6bff9d8d381a0276bafbd4827ed51fa503187101e910d2070d599ab0e66",
+  "tests/controls/sap_C_identity.abap": "348a24f2158acb6144e0ae9694e523445463352da1361b2c98a8eabb982d15f5",
+  "tests/controls/sap_C_kernel_poc.abap": "0f79266f2cdf0704d3a058de1a64f6f4964a857e441aa6b4be66fa6db8b6f4f3",
+  "tests/controls/sap_C_no_condense.abap": "419fae0db3b59e4dea7d541ea68fe3eef067ca07ca85d95018e10c40e1cad347",
+  "tests/controls/sap_C_original.abap": "69f053b668596ac723de14e3df3c03348a2d9a990dfd136e0df72c9fb084a73b",
+  "tests/controls/sap_C_partial_blanks_only.abap": "6bfae03e36a746267c2a72d3575fb34814deec5e53ee65820867ced6b22059e2",
+  "tests/controls/sap_C_partial_sheets_only.abap": "15cb5fb3836419891a260b9681f25f928b57c3500ae9a038d0111af3a689c8c3",
+  "tests/controls/sap_C_special_case_strings.abap": "9a412a678b968b6503006b5c4a601b9af3faa65a9030d0dcea9e376190cdb0fb",
+  "tests/controls/sap_C_syntax_broken.abap": "38972ed5c66b3d816fdb0f39d2233be8c7c37419d58fc969ce3f9e399f80232e",
+  "tests/controls/sap_C_upstream_fix.abap": "80dbae2003d39c73a6f3ba881a179a9501d6074b1054cd3ad1c6e73ab762c433"
+}

@@ -1,0 +1,61 @@
+{
+ "schema": 1,
+ "id": "hb_erp_006",
+ "repo": "timkoehne/LLM-Benchmark-ABAP-Code-Generation",
+ "pr": 0,
+ "base_sha": "6898edf",
+ "merge_sha": "6898edf",
+ "label": "BENCHMARK",
+ "ticket_source": "benchmark_prompt",
+ "production_file": "src/z_humaneval_erp_006.clas.abap",
+ "work_file": "abap_work/hb_erp_006/z_humaneval_erp_006.clas.abap",
+ "original_sha256": "7d54dc9951716dcd39059023f76062fcbb8f6af867a5f0232bb285f39df3b1c9",
+ "test_files": [
+  {
+   "path": "src/z_humaneval_erp_006.clas.testclasses.abap",
+   "stored": "tests_upstream/z_humaneval_erp_006.clas.testclasses.abap",
+   "sha256": "3d8120fd10c1c8dad7e899c8e21558c66bbbbade5c390c37e9dd276c4ac5a676",
+   "new_methods": [
+    "test_no_shortage",
+    "test_shortage_occurs",
+    "test_material_not_found",
+    "test_no_transactions",
+    "test_multiple_transactions",
+    "test_zero_initial_stock"
+   ],
+   "heldout_methods": [
+    "test_no_shortage",
+    "test_no_transactions",
+    "test_zero_initial_stock"
+   ]
+  }
+ ],
+ "allowed_methods": [
+  "calculate_stock"
+ ],
+ "runner": {
+  "project": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_erp_006",
+  "project_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\proj\\hb_erp_006",
+  "libs_dir": "C:\\__NO_ABAP_RUNTIME__\\benchmark\\libs",
+  "tools_dir": "C:\\__NO_ABAP_RUNTIME__\\abap_tools",
+  "config": "abap_transpile.json",
+  "lint_deps_dir": "C:\\__NO_ABAP_RUNTIME__\\libs\\abaplint-deps",
+  "only_object": "Z_HUMANEVAL_ERP_006"
+ },
+ "gate": {
+  "base_transpiles": true,
+  "base_fails": [
+   "test_material_not_found",
+   "test_multiple_transactions",
+   "test_shortage_occurs",
+   "test_zero_initial_stock"
+  ],
+  "heldout_fails_on_base": false,
+  "heldout_failing_methods": [
+   "test_zero_initial_stock"
+  ],
+  "fix_passes": true,
+  "checked_utc": "2026-11-18T13:02:33.321787+00:00"
+ },
+ "created_utc": "2026-11-18T13:02:33.321824+00:00"
+}

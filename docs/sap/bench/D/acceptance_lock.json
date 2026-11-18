@@ -1,0 +1,12 @@
+{
+  "docs/sap/bench/D/TICKET.md": "2a775393206067d95a601e2d1b601f7aac7a482cc6b1bfb824806515c1355c60",
+  "docs/sap/bench/D/abap_transpile.pinned2.json": "4b443cdc89798745578377803747ac68b9dfc697b93bb3f57352e68b7788f2b5",
+  "docs/sap/bench/D/runner.json": "7098ce0735321732fd6f18b0cf2e8b757dfbc9e30ff6fa37e93d7086355197fc",
+  "tests/acceptance/sap_D_acceptance.py": "caf715ec393dc6a5331bc880a1f5b5e88168f874d49a9d3dc15521c45a2a25cd",
+  "tests/controls/sap_D_collateral.abap": "9f1ef73e53f8e6110339b94b9dd6c7902cd6a6bfef4f9533359b2b5d43eeebf2",
+  "tests/controls/sap_D_kernel_poc.abap": "324c12f4c7312cb3df12c6e60d6b4b12c7d01f6385bf8cfa6d9813b6193e8c33",
+  "tests/controls/sap_D_last_line_only.abap": "34334a91ee6e53ea9626e3263a37a2c1e3d4e26b0741bd9bb2aa6b1a01dedd01",
+  "tests/controls/sap_D_original.abap": "452d10aea19dd65af6055036cf2d4986bd5c690c8efa82d447bf574f477dafa5",
+  "tests/controls/sap_D_syntax_broken.abap": "fa0738e1b2badb220059d27bebe9595ca28e2e9b50948388ad10f7874a58001a",
+  "tests/controls/sap_D_upstream_fix.abap": "0097f771e09d0b966d41ffc4ec68e23d0cbb79d0faf70c7798962167e2f950d2"
+}
